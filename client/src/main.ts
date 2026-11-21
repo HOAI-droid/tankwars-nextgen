@@ -345,6 +345,8 @@ function syncAimUi(): void {
   const p = Number(inputPower.value);
   valAngle.textContent = `${a}°`;
   valPower.textContent = String(p);
+  $('tv-angle').textContent = `${a}°`;
+  $('tv-power').textContent = String(p);
   needle.style.transform = `rotate(${-a}deg)`;
   meterFill.style.height = `${p}%`;
   const me = getMyTank();

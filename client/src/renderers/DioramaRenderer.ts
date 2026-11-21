@@ -325,6 +325,7 @@ export class DioramaRenderer {
   private camZoom = 0;
   private kickQueue: string[] = [];
   private baseZ = 820;
+  private lookYOff = 0;
   private tmp = new THREE.Vector3();
 
   private glowTex = radialTexture();
@@ -955,7 +956,8 @@ export class DioramaRenderer {
     this.composer.setSize(w, h);
     this.bloomPass.setSize(w, h);
     this.camera.aspect = w / h;
-    this.baseZ = 800 * Math.max(1, 1.45 / this.camera.aspect);
+    this.baseZ = 800 * Math.max(1, 1.45 / this.camera.aspect) * (h < 520 ? 1.14 : 1);
+    this.lookYOff = h < 520 ? 48 : 0;
     this.camera.updateProjectionMatrix();
   }
 
@@ -1677,7 +1679,7 @@ export class DioramaRenderer {
     const bob = Math.sin(this.elapsed * 0.35) * 1.8;
     const sway = Math.sin(this.elapsed * 0.21) * 14;
     this.camera.position.set(this.camX + sway - 80, 420 + bob - this.camZoom * 30, z);
-    this.camera.lookAt(this.camX * 0.92 + cx * 0.08 - 40, 85 - this.camZoom * 25, 0);
+    this.camera.lookAt(this.camX * 0.92 + cx * 0.08 - 40, 85 + this.lookYOff - this.camZoom * 25, 0);
     if (this.shakeIntensity > 0.2) {
       this.camera.position.x += (Math.random() - 0.5) * this.shakeIntensity;
       this.camera.position.y += (Math.random() - 0.5) * this.shakeIntensity;

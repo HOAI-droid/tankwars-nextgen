@@ -45,10 +45,10 @@
     </header>
 
     <footer id="deck">
-      <div class="gauge" id="gauge-angle">
+      <div class="gauge" id="gauge-angle" style="grid-area:ang">
         <div class="dial"><div class="needle" id="dial-needle"></div><div class="dial-val" id="val-angle">45°</div></div>
         <div class="gauge-body">
-          <span class="gauge-label">WINKEL</span>
+          <span class="gauge-label">WINKEL <b class="touch-val" id="tv-angle">45°</b></span>
           <div class="stepper">
             <button class="step" data-t="angle" data-d="-1">−</button>
             <input type="range" id="input-angle" min="0" max="180" value="45" />
@@ -57,10 +57,10 @@
         </div>
       </div>
 
-      <div class="gauge" id="gauge-power">
+      <div class="gauge" id="gauge-power" style="grid-area:pow">
         <div class="meter"><div class="meter-fill" id="meter-fill"></div><div class="meter-val" id="val-power">55</div></div>
         <div class="gauge-body">
-          <span class="gauge-label">KRAFT</span>
+          <span class="gauge-label">KRAFT <b class="touch-val" id="tv-power">55</b></span>
           <div class="stepper">
             <button class="step" data-t="power" data-d="-1">−</button>
             <input type="range" id="input-power" min="10" max="100" value="55" />
@@ -69,9 +69,9 @@
         </div>
       </div>
 
-      <div id="weapons"></div>
+      <div id="weapons" style="grid-area:wep"></div>
 
-      <button id="btn-fire" class="fire"><span>FEUER</span><small>LEERTASTE</small></button>
+      <button id="btn-fire" class="fire" style="grid-area:fire"><span>FEUER</span><small>LEERTASTE</small></button>
     </footer>
 
     <div id="rotate-hint">Bitte Gerät drehen ↻</div>

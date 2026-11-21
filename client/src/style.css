@@ -398,3 +398,34 @@ input[type='range']::-moz-range-thumb { width: 14px; height: 20px; background: v
   .dial, .meter { width: 48px; height: 48px; }
   #weapons { flex: 1.3 1 0; }
 }
+
+/* ---------- Touch-Layout: große Schieberegler, Daumen-freundlich ---------- */
+.touch-val { display: none; }
+@media (pointer: coarse) {
+  #deck {
+    display: grid;
+    grid-template-columns: minmax(0, 2.1fr) minmax(0, 1fr) auto;
+    grid-template-areas: 'ang wep fire' 'pow wep fire';
+    grid-template-rows: auto auto;
+    gap: 6px 14px;
+    padding: 8px 14px;
+    width: calc(100vw - 16px - var(--safe-l) - var(--safe-r));
+    bottom: calc(6px + var(--safe-b));
+  }
+  .dial, .meter, .step { display: none !important; }
+  .gauge { gap: 0; align-items: center; }
+  .gauge-body { flex-direction: row; align-items: center; gap: 12px; width: 100%; }
+  .gauge-label { display: flex !important; flex-direction: column; min-width: 92px; font-size: 12px; letter-spacing: 2px; line-height: 1.1; }
+  .touch-val { display: block; font-size: 24px; letter-spacing: 0; color: #fff; font-weight: 700; }
+  .stepper { flex: 1; min-width: 0; }
+  input[type='range'] { height: 56px; }
+  input[type='range']::-webkit-slider-runnable-track { height: 14px; border-radius: 7px; background: linear-gradient(90deg, #ff9a3c, #d82a12); }
+  input[type='range']::-webkit-slider-thumb { width: 46px; height: 46px; margin-top: -16px; border-radius: 50%; clip-path: none; background: radial-gradient(circle at 35% 30%, #ffe3a8, #ff9a3c 60%, #c45a14); border: 3px solid #1a1206; box-shadow: 0 0 0 3px rgba(255, 196, 87, .45), 0 4px 12px rgba(0,0,0,.6); }
+  input[type='range']::-moz-range-thumb { width: 42px; height: 42px; border-radius: 50%; background: #ff9a3c; border: 3px solid #1a1206; }
+  #weapons { flex-wrap: nowrap; }
+  .wcard { min-width: 92px; padding: 8px; }
+  .fire { width: 150px; }
+  .fire span { font-size: 28px; }
+  #roster { min-width: 130px; gap: 3px; }
+  .r-row .nm { font-size: 12px; }
+}
