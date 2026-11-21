@@ -575,8 +575,8 @@ export class DioramaRenderer {
 
   private makeTerrainMaterial(): THREE.MeshStandardMaterial {
     const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9, metalness: 0 });
-    const g = this.loadTex('grass.jpg');
-    const r = this.loadTex('dirt.jpg');
+    const g = this.loadTex('grass_detail.jpg');
+    const r = this.loadTex('rock_detail.jpg');
     mat.onBeforeCompile = (sh) => {
       sh.uniforms.gMap = { value: g };
       sh.uniforms.rMap = { value: r };
@@ -594,8 +594,15 @@ export class DioramaRenderer {
           float h21(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
           float n21(vec2 p) { vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
             return mix(mix(h21(i), h21(i + vec2(1, 0)), f.x), mix(h21(i + vec2(0, 1)), h21(i + vec2(1, 1)), f.x), f.y); }
+          vec3 det(sampler2D t, vec2 p) {
+            vec2 a = p / 190.0;
+            vec2 b = mat2(0.8, -0.6, 0.6, 0.8) * p / 83.0 + 17.3;
+            vec2 c = mat2(0.6, 0.8, -0.8, 0.6) * p / 37.0 + 5.1;
+            vec3 ta = mix(vec3(0.5), texture2D(t, a).rgb, 0.75), tb = mix(vec3(0.5), texture2D(t, b).rgb, 0.7), tc = mix(vec3(0.5), texture2D(t, c).rgb, 0.7);
+            return ta * (0.55 + tb * 0.9) * (0.7 + tc * 0.6) * 2.0;
+          }
           vec3 tri(sampler2D t, vec3 p, vec3 w, float s) {
-            return texture2D(t, p.zy / s).rgb * w.x + texture2D(t, p.xz / s).rgb * w.y + texture2D(t, p.xy / s).rgb * w.z;
+            return det(t, p.zy) * w.x + det(t, p.xz) * w.y + det(t, p.xy) * w.z;
           }`
         )
         .replace(
@@ -605,11 +612,15 @@ export class DioramaRenderer {
            float slope = 1.0 - nn.y;
            float nz = n21(vWPos.xz * 0.018) * 0.55 + n21(vWPos.xz * 0.06) * 0.3 + n21(vWPos.xz * 0.2) * 0.15;
            float rock = smoothstep(0.16, 0.4, slope + (nz - 0.5) * 0.28);
-           vec3 gc = tri(gMap, vWPos, w, 230.0);
-           vec3 gc2 = tri(gMap, vWPos * 1.7 + 41.0, w, 230.0);
-           gc = mix(gc, gc2, smoothstep(0.35, 0.65, nz)) * 1.15;
-           vec3 rc = tri(rMap, vWPos, w, 210.0) * 1.2;
-           vec3 moss = mix(rc, rc * vec3(0.5, 0.9, 0.38) * 1.35, smoothstep(0.5, 0.85, nz) * 0.75 * (1.0 - smoothstep(0.45, 0.75, slope)));
+           float lo = n21(vWPos.xz * 0.006 + vWPos.y * 0.004);
+           float mi = n21(vWPos.xz * 0.031 + 7.0);
+           vec3 gBase = mix(vec3(0.17, 0.25, 0.09), vec3(0.36, 0.40, 0.15), smoothstep(0.25, 0.75, mi * 0.6 + lo * 0.4));
+           gBase = mix(gBase, vec3(0.30, 0.24, 0.13), smoothstep(0.7, 0.9, lo) * 0.6);
+           vec3 gc = gBase * 0.3 * tri(gMap, vWPos, w, 1.0);
+           vec3 rBase = mix(vec3(0.28, 0.25, 0.22), vec3(0.45, 0.40, 0.34), smoothstep(0.2, 0.8, mi));
+           rBase = mix(rBase, vec3(0.36, 0.27, 0.19), smoothstep(0.55, 0.85, lo) * 0.7);
+           vec3 rc = rBase * 0.36 * tri(rMap, vWPos, w, 1.0);
+           vec3 moss = mix(rc, rc * vec3(0.55, 1.0, 0.4) * 1.3, smoothstep(0.5, 0.85, nz) * 0.7 * (1.0 - smoothstep(0.45, 0.75, slope)));
            vec3 col = mix(gc, moss, rock);
            float mud = 1.0 - smoothstep(24.0, 46.0, vWPos.y);
            col = mix(col, col * vec3(0.5, 0.46, 0.42), mud * 0.85);
