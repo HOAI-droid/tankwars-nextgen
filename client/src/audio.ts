@@ -1,6 +1,7 @@
 export class SoundEngine {
   private ctx: AudioContext | null = null;
   public retroMode = false;
+  public muted = false;
 
   private ensureContext(): AudioContext | null {
     if (!this.ctx && typeof window !== 'undefined') {
@@ -12,6 +13,7 @@ export class SoundEngine {
   }
 
   public playShoot(): void {
+    if (this.muted) return;
     const ctx = this.ensureContext();
     if (!ctx) return;
     const now = ctx.currentTime;
@@ -41,6 +43,7 @@ export class SoundEngine {
   }
 
   public playExplosion(radius: number): void {
+    if (this.muted) return;
     const ctx = this.ensureContext();
     if (!ctx) return;
     const now = ctx.currentTime;

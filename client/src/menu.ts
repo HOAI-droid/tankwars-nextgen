@@ -1,165 +1,178 @@
 import { GameMode } from '@tankwars/shared';
-import { NetworkClient } from './network.js';
+import { ClientSession, HostSession, LobbyPlayer } from './network.js';
 
 export interface StartMenuCallbacks {
-  onStartSolo: (playerName: string, mode: GameMode) => void;
-  onOnlineReady: (net: NetworkClient, myId: string) => void;
+  onSolo: (playerName: string, mode: GameMode) => void;
+  onCreate: (playerName: string, mode: GameMode) => Promise<HostSession>;
+  onJoin: (code: string, playerName: string) => Promise<ClientSession>;
+  onHostStart: (totalPlayers: number) => void;
+  onLeave: () => void;
 }
+
+const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 
 export class StartMenu {
   private el: HTMLDivElement;
-  private net: NetworkClient | null = null;
+  private listEl: HTMLElement | null = null;
+  public visible = true;
 
   constructor(private cb: StartMenuCallbacks) {
     this.el = document.createElement('div');
-    this.el.id = 'start-menu';
-    this.el.style.cssText = `
-      position:fixed; inset:0; z-index:40; background:rgba(12,16,26,0.88);
-      backdrop-filter:blur(10px); display:flex; align-items:center; justify-content:center; padding:16px;
-    `;
+    this.el.className = 'screen';
     document.body.appendChild(this.el);
     this.renderMain();
   }
 
-  public show(): void {
-    this.el.classList.remove('hidden');
+  public showMain(): void {
+    this.visible = true;
+    this.el.classList.remove('hidden', 'out');
+    this.renderMain();
   }
 
   public hide(): void {
-    this.el.classList.add('hidden');
+    this.visible = false;
+    this.el.classList.add('out');
+    setTimeout(() => {
+      if (!this.visible) this.el.classList.add('hidden');
+    }, 360);
+  }
+
+  public setPlayers(players: LobbyPlayer[]): void {
+    if (!this.listEl) return;
+    this.listEl.innerHTML = players
+      .map(
+        (p, i) =>
+          `<div class="pitem"><i style="background:${p.color}"></i><span>${esc(p.name)}</span><small>${i === 0 ? 'HOST' : 'BEREIT'}</small></div>`
+      )
+      .join('');
+  }
+
+  private logo(): string {
+    return `
+      <div class="logo">
+        <div class="pre">ARTILLERIE · KRIEG · CHAOS</div>
+        <h1>TANK<em>WARS</em></h1>
+        <p>Berechne Winkel, Kraft und Wind. Zerstöre das Gelände, kaufe Waffen, überlebe. Bis zu 10 Kommandanten – online per Raum-Code, ohne Server-Setup.</p>
+      </div>`;
   }
 
   private renderMain(): void {
-    const savedName = localStorage.getItem('tw_name') || 'Kommandant';
-    const defaultServer = localStorage.getItem('tw_server') || `http://${window.location.hostname}:3090`;
+    this.listEl = null;
+    const savedName = localStorage.getItem('tw_name') || '';
+    const savedMode = localStorage.getItem('tw_mode') || 'SIMULTANEOUS';
 
     this.el.innerHTML = `
-      <div style="background:#1a2232; border:1px solid rgba(255,255,255,0.16); border-radius:18px; padding:22px; width:100%; max-width:420px; display:flex; flex-direction:column; gap:14px;">
-        <div style="text-align:center;">
-          <h1 style="margin:0; font-size:26px; letter-spacing:1px;">💥 TANKWARS <span style="color:#ff6b2b;">NEXTGEN</span></h1>
-          <p style="margin:4px 0 0; font-size:13px; opacity:0.7;">2.5D Diorama & 90s VGA Artillery</p>
-        </div>
-
-        <div style="display:flex; gap:8px;">
-          <input id="m-name" value="${savedName}" placeholder="Dein Name" style="flex:1; background:#232d42; color:#fff; border:1px solid rgba(255,255,255,0.18); border-radius:8px; padding:10px; font-size:14px;" />
-          <select id="m-mode" style="background:#232d42; color:#fff; border:1px solid rgba(255,255,255,0.18); border-radius:8px; padding:10px; font-size:14px;">
-            <option value="SIMULTANEOUS">Simultan-Chaos</option>
-            <option value="CLASSIC">Klassisch (Reihum)</option>
-          </select>
-        </div>
-
-        <button id="m-solo" class="btn-fire" style="width:100%;">🎮 Solo gegen Bots spielen</button>
-
-        <hr style="border:none; border-top:1px solid rgba(255,255,255,0.12); margin:2px 0;" />
-
-        <div style="display:flex; flex-direction:column; gap:8px;">
-          <label style="font-size:12px; opacity:0.75;">🌐 Online-Multiplayer (bis 10 Spieler)</label>
-          <input id="m-server" value="${defaultServer}" placeholder="Server-URL (z. B. https://tankwars.deine-domain.de)" style="background:#232d42; color:#fff; border:1px solid rgba(255,255,255,0.18); border-radius:8px; padding:8px 10px; font-size:13px;" />
-
-          <button id="m-create" style="background:#3b82f6; color:#fff; border:none; border-radius:8px; padding:10px; font-weight:700; cursor:pointer;">
-            + Neuen Raum erstellen
-          </button>
-
-          <div style="display:flex; gap:8px;">
-            <input id="m-code" maxlength="4" placeholder="RAUM-CODE" style="flex:1; text-transform:uppercase; background:#232d42; color:#fff; border:1px solid rgba(255,255,255,0.18); border-radius:8px; padding:10px; font-size:14px; letter-spacing:2px;" />
-            <button id="m-join" style="background:#10b981; color:#fff; border:none; border-radius:8px; padding:10px 16px; font-weight:700; cursor:pointer;">
-              Beitreten
-            </button>
+      <div class="menu-wrap">
+        ${this.logo()}
+        <div class="card">
+          <h2>KOMMANDANT</h2>
+          <div class="row">
+            <div class="field" style="flex:1.3"><label>NAME</label><input id="m-name" class="input" maxlength="14" value="${esc(savedName)}" placeholder="Kommandant" autocomplete="off" /></div>
+            <div class="field"><label>MODUS</label>
+              <select id="m-mode">
+                <option value="SIMULTANEOUS" ${savedMode === 'SIMULTANEOUS' ? 'selected' : ''}>Simultan</option>
+                <option value="CLASSIC" ${savedMode === 'CLASSIC' ? 'selected' : ''}>Reihum</option>
+              </select>
+            </div>
           </div>
-          <div id="m-error" style="color:#f87171; font-size:13px; min-height:16px;"></div>
+          <button id="m-solo" class="btn primary">Solo · gegen Bots</button>
+          <div class="divider">ONLINE</div>
+          <button id="m-create" class="btn blue">Raum erstellen</button>
+          <div class="row">
+            <input id="m-code" class="input code-input" maxlength="4" placeholder="CODE" autocomplete="off" autocapitalize="characters" spellcheck="false" style="flex:1.4" />
+            <button id="m-join" class="btn green">Beitreten</button>
+          </div>
+          <div id="m-error" class="err"></div>
         </div>
-      </div>
-    `;
+      </div>`;
 
-    const nameEl = this.el.querySelector<HTMLInputElement>('#m-name')!;
-    const modeEl = this.el.querySelector<HTMLSelectElement>('#m-mode')!;
-    const serverEl = this.el.querySelector<HTMLInputElement>('#m-server')!;
-    const codeEl = this.el.querySelector<HTMLInputElement>('#m-code')!;
-    const errEl = this.el.querySelector<HTMLDivElement>('#m-error')!;
+    const q = <T extends HTMLElement>(s: string) => this.el.querySelector<T>(s)!;
+    const nameEl = q<HTMLInputElement>('#m-name');
+    const modeEl = q<HTMLSelectElement>('#m-mode');
+    const codeEl = q<HTMLInputElement>('#m-code');
+    const errEl = q<HTMLDivElement>('#m-error');
+    const btns = [q<HTMLButtonElement>('#m-solo'), q<HTMLButtonElement>('#m-create'), q<HTMLButtonElement>('#m-join')];
 
-    const savePrefs = () => {
-      localStorage.setItem('tw_name', nameEl.value.trim() || 'Kommandant');
-      localStorage.setItem('tw_server', serverEl.value.trim());
+    const prefs = () => {
+      const name = nameEl.value.trim() || 'Kommandant';
+      localStorage.setItem('tw_name', nameEl.value.trim());
+      localStorage.setItem('tw_mode', modeEl.value);
+      return name;
+    };
+    const busy = (b: boolean, msg = '') => {
+      btns.forEach((x) => (x.disabled = b));
+      errEl.style.color = b ? 'var(--accent2)' : '';
+      errEl.textContent = msg;
     };
 
-    this.el.querySelector('#m-solo')!.addEventListener('click', () => {
-      savePrefs();
+    codeEl.addEventListener('input', () => (codeEl.value = codeEl.value.toUpperCase().replace(/[^A-Z0-9]/g, '')));
+
+    btns[0].addEventListener('click', () => {
+      const name = prefs();
       this.hide();
-      this.cb.onStartSolo(nameEl.value.trim() || 'Kommandant', modeEl.value as GameMode);
+      this.cb.onSolo(name, modeEl.value as GameMode);
     });
 
-    this.el.querySelector('#m-create')!.addEventListener('click', async () => {
-      savePrefs();
-      errEl.textContent = 'Verbinde mit Server…';
+    btns[1].addEventListener('click', async () => {
+      const name = prefs();
+      busy(true, 'Raum wird erstellt…');
       try {
-        this.net = new NetworkClient(serverEl.value.trim());
-        const code = await this.net.createRoom(nameEl.value.trim(), modeEl.value as GameMode);
-        this.renderLobby(code, true, [{ name: nameEl.value.trim(), color: '#3b82f6' }]);
+        const host = await this.cb.onCreate(name, modeEl.value as GameMode);
+        this.renderLobby(host.code, true, host.players);
       } catch (e) {
-        errEl.textContent = `Fehler: ${String(e)}`;
+        busy(false);
+        errEl.textContent = (e as Error).message || String(e);
       }
     });
 
-    this.el.querySelector('#m-join')!.addEventListener('click', async () => {
-      savePrefs();
-      const code = codeEl.value.trim().toUpperCase();
+    btns[2].addEventListener('click', async () => {
+      const name = prefs();
+      const code = codeEl.value.trim();
       if (code.length < 4) {
-        errEl.textContent = 'Bitte 4-stelligen Raum-Code eingeben.';
+        errEl.textContent = 'Bitte den 4-stelligen Raum-Code eingeben.';
         return;
       }
-      errEl.textContent = 'Trete Raum bei…';
+      busy(true, 'Verbinde…');
       try {
-        this.net = new NetworkClient(serverEl.value.trim());
-        const joinedCode = await this.net.joinRoom(code, nameEl.value.trim());
-        this.renderLobby(joinedCode, false, []);
+        const client = await this.cb.onJoin(code, name);
+        this.renderLobby(client.code, false, client.players);
       } catch (e) {
-        errEl.textContent = `Fehler: ${String(e)}`;
+        busy(false);
+        errEl.textContent = (e as Error).message || String(e);
       }
     });
   }
 
-  private renderLobby(code: string, isHost: boolean, initialPlayers: Array<{ name: string; color: string }>): void {
-    const net = this.net!;
+  private renderLobby(code: string, isHost: boolean, players: LobbyPlayer[]): void {
     this.el.innerHTML = `
-      <div style="background:#1a2232; border:1px solid rgba(255,255,255,0.16); border-radius:18px; padding:22px; width:100%; max-width:420px; display:flex; flex-direction:column; gap:14px;">
-        <div style="text-align:center;">
-          <div style="font-size:12px; opacity:0.7;">RAUM-CODE TEILEN</div>
-          <div style="font-size:34px; font-weight:900; letter-spacing:6px; color:#ff6b2b;">${code}</div>
+      <div class="menu-wrap">
+        ${this.logo()}
+        <div class="card">
+          <h2>${isHost ? 'DEIN RAUM' : 'RAUM BEIGETRETEN'}</h2>
+          <div class="hint" style="text-align:center">Raum-Code – diesen Code deinen Mitspielern geben</div>
+          <div class="code-big">${esc(code)}</div>
+          <div id="m-list" class="plist"></div>
+          ${
+            isHost
+              ? `<div class="field"><label>GESAMTZAHL KOMMANDANTEN (REST WIRD MIT BOTS AUFGEFÜLLT)</label>
+                   <select id="m-total">${[2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => `<option value="${n}" ${n === 6 ? 'selected' : ''}>${n}</option>`).join('')}</select></div>
+                 <button id="m-start" class="btn primary">Match starten</button>`
+              : `<div class="hint" style="text-align:center">Warte auf den Host…</div>`
+          }
+          <button id="m-back" class="btn ghost">Raum verlassen</button>
         </div>
+      </div>`;
+    this.listEl = this.el.querySelector('#m-list');
+    this.setPlayers(players);
 
-        <div id="lobby-list" style="display:flex; flex-direction:column; gap:6px; max-height:200px; overflow-y:auto;"></div>
-
-        ${
-          isHost
-            ? `<button id="lobby-start" class="btn-fire" style="width:100%;">🚀 Match starten (auf 6 mit Bots auffüllen)</button>`
-            : `<p style="text-align:center; opacity:0.75; margin:4px 0;">Warte darauf, dass der Host startet…</p>`
-        }
-      </div>
-    `;
-
-    const listEl = this.el.querySelector<HTMLDivElement>('#lobby-list')!;
-    const drawPlayers = (players: Array<{ name: string; color: string }>) => {
-      listEl.innerHTML = players
-        .map(
-          (p) => `
-          <div style="display:flex; align-items:center; gap:10px; background:#232d42; padding:8px 12px; border-radius:8px;">
-            <span style="width:12px; height:12px; border-radius:50%; background:${p.color}; display:inline-block;"></span>
-            <span style="font-weight:600;">${p.name}</span>
-          </div>`
-        )
-        .join('');
-    };
-
-    drawPlayers(initialPlayers);
-    net.socket.on('room:players', drawPlayers);
-
-    net.socket.once('game:state', () => {
+    this.el.querySelector('#m-start')?.addEventListener('click', () => {
+      const total = Number(this.el.querySelector<HTMLSelectElement>('#m-total')!.value);
       this.hide();
-      this.cb.onOnlineReady(net, net.socket.id!);
+      this.cb.onHostStart(total);
     });
-
-    this.el.querySelector('#lobby-start')?.addEventListener('click', () => {
-      net.startMatch(6);
+    this.el.querySelector('#m-back')!.addEventListener('click', () => {
+      this.cb.onLeave();
+      this.renderMain();
     });
   }
 }

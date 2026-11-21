@@ -2,7 +2,15 @@
 <html lang="de">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="theme-color" content="#0b0f17" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="TankWars" />
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="icon" type="image/svg+xml" href="./icon.svg" />
+    <link rel="apple-touch-icon" href="./icon-192.png" />
     <title>TankWars NextGen</title>
   </head>
   <body>
@@ -12,33 +20,61 @@
       <div id="crt-overlay" class="hidden"></div>
     </div>
 
-    <header id="top-bar">
-      <div class="pill" id="turn-info">Runde 1</div>
-      <div class="pill" id="wind-info">Wind: 0</div>
-      <div class="actions">
-        <button id="btn-mode" class="btn-secondary">Modus: Simultan</button>
-        <button id="btn-retro" class="btn-retro">📺 90s Modus</button>
+    <div id="nameplates"></div>
+    <div id="floaters"></div>
+    <div id="banner"></div>
+
+    <header id="hud-top">
+      <div id="roster"></div>
+      <div id="center-info">
+        <div id="round-label">RUNDE 1</div>
+        <div id="wind-box">
+          <span class="wind-arrow" id="wind-left">‹‹</span>
+          <span id="wind-val">WIND 0</span>
+          <span class="wind-arrow" id="wind-right">››</span>
+        </div>
+        <div id="turn-info"></div>
+      </div>
+      <div id="sys-buttons">
+        <button id="btn-mode" class="sys hidden" title="Modus"></button>
+        <button id="btn-retro" class="sys" title="90er-Modus">VGA</button>
+        <button id="btn-sound" class="sys" title="Ton">♪</button>
+        <button id="btn-full" class="sys" title="Vollbild">⛶</button>
+        <button id="btn-menu" class="sys" title="Menü">☰</button>
       </div>
     </header>
 
-    <footer id="hud">
-      <div class="control-group">
-        <label>Winkel <strong id="val-angle">45°</strong></label>
-        <input type="range" id="input-angle" min="0" max="180" value="45" />
+    <footer id="deck">
+      <div class="gauge" id="gauge-angle">
+        <div class="dial"><div class="needle" id="dial-needle"></div><div class="dial-val" id="val-angle">45°</div></div>
+        <div class="gauge-body">
+          <span class="gauge-label">WINKEL</span>
+          <div class="stepper">
+            <button class="step" data-t="angle" data-d="-1">−</button>
+            <input type="range" id="input-angle" min="0" max="180" value="45" />
+            <button class="step" data-t="angle" data-d="1">+</button>
+          </div>
+        </div>
       </div>
 
-      <div class="control-group">
-        <label>Kraft <strong id="val-power">55%</strong></label>
-        <input type="range" id="input-power" min="10" max="100" value="55" />
+      <div class="gauge" id="gauge-power">
+        <div class="meter"><div class="meter-fill" id="meter-fill"></div><div class="meter-val" id="val-power">55</div></div>
+        <div class="gauge-body">
+          <span class="gauge-label">KRAFT</span>
+          <div class="stepper">
+            <button class="step" data-t="power" data-d="-1">−</button>
+            <input type="range" id="input-power" min="10" max="100" value="55" />
+            <button class="step" data-t="power" data-d="1">+</button>
+          </div>
+        </div>
       </div>
 
-      <div class="control-group">
-        <label>Waffe</label>
-        <select id="select-weapon"></select>
-      </div>
+      <div id="weapons"></div>
 
-      <button id="btn-fire" class="btn-fire">FEUER!</button>
+      <button id="btn-fire" class="fire"><span>FEUER</span><small>LEERTASTE</small></button>
     </footer>
+
+    <div id="rotate-hint">Bitte Gerät drehen ↻</div>
 
     <script type="module" src="/src/main.ts"></script>
   </body>

@@ -28,6 +28,7 @@ export class GameSimulation {
 
   private pendingShots = new Map<string, ShotCommand>();
   private projCounter = 0;
+  private autoTimer = 0;
 
   constructor(mode: GameMode = 'SIMULTANEOUS') {
     this.mode = mode;
@@ -139,6 +140,19 @@ export class GameSimulation {
 
   public step(dt: number): void {
     this.recentExplosions = [];
+
+    // Sind keine Menschen mehr am Leben (nur noch Bots), würde das Match ewig
+    // in PLANNING hängen bleiben -> Bots automatisch feuern lassen.
+    if (this.phase === 'PLANNING' && this.mode === 'SIMULTANEOUS') {
+      const alive = this.tanks.filter((t) => t.alive);
+      if (alive.length > 1 && alive.every((t) => t.isBot)) {
+        this.autoTimer += dt;
+        if (this.autoTimer > 0.8) {
+          this.autoTimer = 0;
+          this.triggerSimultaneousLaunch();
+        }
+      }
+    }
 
     for (const p of this.projectiles) {
       if (!p.alive) continue;
@@ -261,6 +275,8 @@ export class GameSimulation {
   private endTurn(): void {
     const alive = this.tanks.filter((t) => t.alive);
     if (alive.length <= 1) {
+      for (const t of this.tanks) t.money += 500;
+      if (alive[0]) alive[0].money += 1500;
       this.phase = 'GAME_OVER';
       return;
     }
@@ -319,6 +335,7 @@ export class GameSimulation {
       tank.hp = tank.maxHp;
       tank.alive = true;
       tank.ready = false;
+      tank.power = 55;
       tank.angle = x < WORLD_WIDTH / 2 ? 45 : 135;
     });
 
@@ -328,6 +345,7 @@ export class GameSimulation {
 
   public getSnapshot(includeTerrain = false) {
     return {
+      v: 1,
       mode: this.mode,
       phase: this.phase,
       round: this.round,

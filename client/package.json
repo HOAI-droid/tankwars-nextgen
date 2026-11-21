@@ -8,8 +8,10 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@fontsource/black-ops-one": "^5.3.0",
+    "@fontsource/chakra-petch": "^5.3.0",
     "@tankwars/shared": "*",
-    "socket.io-client": "^4.8.1",
+    "peerjs": "^1.5.5",
     "three": "^0.170.0"
   },
   "devDependencies": {
