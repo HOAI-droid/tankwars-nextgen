@@ -788,3 +788,20 @@ if (import.meta.env.DEV) (window as unknown as Record<string, unknown>).__tw = {
 startDemo();
 syncAimUi();
 requestAnimationFrame(loop);
+
+/* Automatische Aktualisierung: veraltete Zwischenspeicher (z. B. Home-Bildschirm-App) neu laden */
+async function checkForUpdate(): Promise<void> {
+  try {
+    const r = await fetch(`./version.json?t=${Date.now()}`, { cache: 'no-store' });
+    const { id } = (await r.json()) as { id: string };
+    if (id && id !== __BUILD_ID__) location.reload();
+  } catch {
+    /* offline oder Dev-Server */
+  }
+}
+if (!import.meta.env.DEV) {
+  void checkForUpdate();
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) void checkForUpdate();
+  });
+}

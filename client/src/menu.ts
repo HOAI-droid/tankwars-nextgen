@@ -83,6 +83,7 @@ export class StartMenu {
             <button id="m-join" class="btn green">Beitreten</button>
           </div>
           <div id="m-error" class="err"></div>
+          <div class="hint" style="text-align:right;opacity:.5;font-size:10px">Build ${typeof __BUILD_ID__ === 'string' ? __BUILD_ID__ : 'dev'}</div>
         </div>
       </div>`;
 
