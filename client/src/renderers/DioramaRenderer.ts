@@ -5,6 +5,7 @@ import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPa
 import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
+import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import {
   CHUNK_SIZE,
   ExplosionEvent,
@@ -81,16 +82,13 @@ interface Cloud {
 }
 
 const TERRAIN_DEPTH = 210;
-const GRID_X0 = -420;
-const GRID_X1 = 1420;
-const RIVER_Y = 24;
-const TUFTS = 3400;
-const ROCKS = 110;
-const TREES = 150;
+const TUFTS = 4200;
+const ROCKS = 60;
+const TREES = 30;
 const RAIN = 900;
-const MISTS = 7;
+const MISTS = 14;
 const TANK_SCALE = 1;
-const MS = 72; // Modell-Skalierung
+const MS = 72;
 const YAW = 0.5;
 const PIVOT_X = 0.54 * MS * Math.cos(YAW);
 const PIVOT_Y = 0.413 * MS;
@@ -272,16 +270,10 @@ export class DioramaRenderer {
   private camera: THREE.PerspectiveCamera;
   private sun!: THREE.DirectionalLight;
 
-  private pmrem!: THREE.PMREMGenerator;
-  private terrainMesh!: THREE.Mesh;
-  private terrainGeo!: THREE.BufferGeometry;
-  private gridXs: number[] = [];
-  private gridZs: number[] = [];
-  private baseH = new Float32Array(WORLD_WIDTH + 1);
-  private smoothH = new Float32Array(WORLD_WIDTH + 1);
-  private baseReady = false;
-  private terrainDirtyFlag = true;
-  private waterUniform = { value: 0 };
+  private chunkMeshes = new Map<number, THREE.Group>();
+  private ext = new Map<number, THREE.Group>();
+  private faceMat!: THREE.MeshStandardMaterial;
+  private topMat!: THREE.MeshStandardMaterial;
   private tufts!: THREE.InstancedMesh;
   private rocks!: THREE.InstancedMesh;
   private trees!: THREE.InstancedMesh;
@@ -330,7 +322,6 @@ export class DioramaRenderer {
   private camZoom = 0;
   private kickQueue: string[] = [];
   private baseZ = 820;
-  private lookYOff = 0;
   private tmp = new THREE.Vector3();
 
   private glowTex = radialTexture();
@@ -351,9 +342,11 @@ export class DioramaRenderer {
     this.scene = new THREE.Scene();
     this.scene.fog = new THREE.Fog('#6b7783', 800, 2800);
 
-    this.pmrem = new THREE.PMREMGenerator(this.renderer);
+    const pmrem = new THREE.PMREMGenerator(this.renderer);
+    this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+    this.scene.environmentIntensity = 0.5;
 
-    this.camera = new THREE.PerspectiveCamera(46, window.innerWidth / window.innerHeight, 10, 9000);
+    this.camera = new THREE.PerspectiveCamera(38, window.innerWidth / window.innerHeight, 10, 9000);
 
     const rt = new THREE.WebGLRenderTarget(window.innerWidth, window.innerHeight, {
       type: THREE.HalfFloatType,
@@ -369,10 +362,6 @@ export class DioramaRenderer {
     this.composer.addPass(new OutputPass());
 
     this.setupSky();
-    const envScene = new THREE.Scene();
-    envScene.add(new THREE.Mesh(new THREE.SphereGeometry(100, 48, 24), this.skyMat));
-    this.scene.environment = this.pmrem.fromScene(envScene, 0.02).texture;
-    this.scene.environmentIntensity = 1.15;
     this.setupLights();
     this.setupStage();
     this.setupFoliage();
@@ -409,7 +398,7 @@ export class DioramaRenderer {
       this.scene.add(sp);
       this.blasts.push({ sprite: sp, active: false, life: 0, maxLife: 1, size: 1, spin: 0 });
     }
-    const rockTex2 = this.loadTex('t_cliff.jpg');
+    const rockTex2 = this.loadTex('dirt.jpg');
     this.rubbleMesh = new THREE.InstancedMesh(
       new THREE.IcosahedronGeometry(1, 1),
       new THREE.MeshStandardMaterial({ map: rockTex2, bumpMap: rockTex2, bumpScale: 2, color: '#6d655d', roughness: 0.95, flatShading: true }),
@@ -518,7 +507,6 @@ export class DioramaRenderer {
     this.rubble.length = 0;
     this.rubbleMesh.count = 0;
     this.burners.length = 0;
-    this.baseReady = false;
   }
 
   private loadTex(path: string, rx = 1, ry = 1, srgb = true): THREE.Texture {
@@ -552,16 +540,16 @@ export class DioramaRenderer {
     this.scene.add(new THREE.HemisphereLight('#b7c6da', '#3a4634', 1.5));
 
     const sun = new THREE.DirectionalLight('#ffe0b8', 3.6);
-    sun.position.set(WORLD_WIDTH / 2 + 760, 720, 640);
+    sun.position.set(WORLD_WIDTH / 2 + 620, 620, 520);
     sun.target.position.set(WORLD_WIDTH / 2, 120, 0);
     sun.castShadow = true;
-    sun.shadow.mapSize.set(4096, 4096);
-    sun.shadow.camera.left = -960;
-    sun.shadow.camera.right = 960;
-    sun.shadow.camera.top = 560;
-    sun.shadow.camera.bottom = -460;
+    sun.shadow.mapSize.set(2048, 2048);
+    sun.shadow.camera.left = -780;
+    sun.shadow.camera.right = 780;
+    sun.shadow.camera.top = 520;
+    sun.shadow.camera.bottom = -380;
     sun.shadow.camera.near = 50;
-    sun.shadow.camera.far = 2800;
+    sun.shadow.camera.far = 2000;
     sun.shadow.bias = -0.0005;
     sun.shadow.normalBias = 0.8;
     this.scene.add(sun, sun.target);
@@ -578,181 +566,23 @@ export class DioramaRenderer {
     this.scene.add(fill, fill.target);
   }
 
-  private makeTerrainMaterial(): THREE.MeshStandardMaterial {
-    const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.92, metalness: 0 });
-    const T = {
-      tA: this.loadTex('t_grass_a.jpg'), tB: this.loadTex('t_grass_b.jpg'), tM: this.loadTex('t_moss.jpg'),
-      tK: this.loadTex('t_cliff.jpg'), tD: this.loadTex('t_mud.jpg'), tC: this.loadTex('t_crater.jpg'),
-    };
-    mat.onBeforeCompile = (sh) => {
-      for (const [k, v] of Object.entries(T)) sh.uniforms[k] = { value: v };
-      sh.vertexShader = sh.vertexShader
-        .replace('#include <common>', '#include <common>\nvarying vec3 vWPos;\nvarying vec3 vWNor;')
-        .replace('#include <begin_vertex>', '#include <begin_vertex>\nvWPos = (modelMatrix * vec4(position, 1.0)).xyz;\nvWNor = normalize(mat3(modelMatrix) * normal);');
-      sh.fragmentShader = sh.fragmentShader
-        .replace(
-          '#include <common>',
-          `#include <common>
-          varying vec3 vWPos;
-          varying vec3 vWNor;
-          uniform sampler2D tA; uniform sampler2D tB; uniform sampler2D tM;
-          uniform sampler2D tK; uniform sampler2D tD; uniform sampler2D tC;
-          float h21(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
-          float n21(vec2 p) { vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
-            return mix(mix(h21(i), h21(i + vec2(1, 0)), f.x), mix(h21(i + vec2(0, 1)), h21(i + vec2(1, 1)), f.x), f.y); }
-          // zwei verdrehte/skalierte Abtastungen, per Rauschen gemischt -> keine sichtbare Kachelung
-          vec3 st(sampler2D t, vec2 p, float s) {
-            vec3 a = texture2D(t, p / s).rgb;
-            vec3 b = texture2D(t, mat2(0.8, -0.6, 0.6, 0.8) * p / (s * 0.57) + 13.7).rgb;
-            return mix(a, b, smoothstep(0.3, 0.7, n21(p * 0.012 + 3.1)));
-          }
-          vec3 tri3(sampler2D t, vec3 p, vec3 w, float s) {
-            return texture2D(t, p.zy / s).rgb * w.x + st(t, p.xz, s) * w.y + texture2D(t, p.xy / s).rgb * w.z;
-          }`
-        )
-        .replace(
-          '#include <map_fragment>',
-          `vec3 nn = normalize(vWNor);
-           vec3 w = pow(abs(nn), vec3(4.0)); w /= (w.x + w.y + w.z);
-           float slope = 1.0 - nn.y;
-           vec2 xz = vWPos.xz;
-           float nz = n21(xz * 0.018) * 0.55 + n21(xz * 0.06) * 0.3 + n21(xz * 0.2) * 0.15;
-           float lo = n21(xz * 0.006 + vWPos.y * 0.004);
-           float mi = n21(xz * 0.031 + 7.0);
-           vec3 grass = mix(st(tA, xz, 300.0), st(tB, xz, 260.0), smoothstep(0.35, 0.65, lo * 0.6 + mi * 0.4));
-           vec3 moss = tri3(tM, vWPos, w, 280.0);
-           vec3 cliff = tri3(tK, vWPos, w, 340.0) * vec3(0.6, 0.56, 0.5);
-           vec3 mud = st(tD, xz, 280.0);
-           vec3 crater = st(tC, xz, 240.0);
-           float rock = smoothstep(0.34, 0.62, slope + (nz - 0.5) * 0.22);
-           vec3 flat1 = mix(grass, moss, smoothstep(0.5, 0.85, mi) * 0.85);
-           vec3 steep = mix(cliff, moss, smoothstep(0.55, 0.9, nz) * 0.35 * (1.0 - smoothstep(0.55, 0.8, slope)));
-           vec3 col = mix(flat1, steep, rock);
-           float wet = 1.0 - smoothstep(26.0, 54.0, vWPos.y);
-           float patch1 = smoothstep(0.78, 0.9, n21(xz * 0.011 + 9.0)) * (1.0 - rock);
-           col = mix(col, mud, clamp(wet * 0.9 + patch1 * 0.75, 0.0, 1.0));
-           float sc = clamp((1.0 - vColor.r) / 0.78, 0.0, 1.0);
-           col = mix(col, crater * 0.9, smoothstep(0.1, 0.5, sc));
-           diffuseColor.rgb *= col * 0.8;`
-        );
-    };
-    return mat;
-  }
-
   private setupStage(): void {
-    // Foto-Backdrop (Berge/Wald/Nebel aus dem Konzeptbild)
-    const bd = this.loadTex('backdrop_full.webp');
+    // Materialien mit Foto-Texturen aus dem Konzeptbild
+    const dirt = this.loadTex('dirt.jpg');
+    const grass = this.loadTex('grass.jpg');
+    this.faceMat = new THREE.MeshStandardMaterial({ map: dirt, bumpMap: dirt, bumpScale: 3.2, vertexColors: true, roughness: 0.96, metalness: 0 });
+    this.topMat = new THREE.MeshStandardMaterial({ map: grass, bumpMap: grass, bumpScale: 2.4, vertexColors: true, roughness: 0.95, metalness: 0 });
+
+    // Painted Backdrop: Berge, Wald und Nebel aus dem Konzeptbild
+    const bd = this.loadTex('backdrop.webp');
     bd.wrapS = bd.wrapT = THREE.ClampToEdgeWrapping;
-    const bw = 3600, bh = bw * (1339 / 2400);
-    const plate = new THREE.Mesh(new THREE.PlaneGeometry(bw, bh), new THREE.MeshBasicMaterial({ map: bd, depthWrite: false, fog: false, color: '#e8ecf2' }));
-    plate.position.set(WORLD_WIDTH / 2, 420, -900);
+    const plate = new THREE.Mesh(
+      new THREE.PlaneGeometry(2300, 2300 * (580 / 1600)),
+      new THREE.MeshBasicMaterial({ map: bd, transparent: true, depthWrite: false, fog: false, color: '#dfe5ee' })
+    );
+    plate.position.set(WORLD_WIDTH / 2, 40 + (2300 * (580 / 1600)) / 2, -760);
     plate.renderOrder = -5;
     this.scene.add(plate);
-
-    // Gelände als echtes 3D-Gitter (Tal mit Hügeln, Wald und Fluss)
-    this.gridXs = [];
-    for (let x = GRID_X0; x <= GRID_X1; x += 5) this.gridXs.push(x);
-    this.gridZs = [-520, -400, -300, -220, -160, -120, -90, -66, -48, -34, -22, -12, -5, 0, 5, 12, 22, 34, 48, 64, 82, 100, 118, 136, 152, 166, 180, 195, 205, 218, 240, 290, 370, 470];
-    const nx = this.gridXs.length, nz = this.gridZs.length;
-    const pos = new Float32Array(nx * nz * 3);
-    const col = new Float32Array(nx * nz * 3).fill(1);
-    const idx: number[] = [];
-    for (let j = 0; j < nz - 1; j++) {
-      for (let i = 0; i < nx - 1; i++) {
-        const a = j * nx + i, b = a + 1, c = a + nx, d = c + 1;
-        idx.push(a, c, b, b, c, d);
-      }
-    }
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-    geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
-    geo.setIndex(idx);
-    this.terrainGeo = geo;
-    this.terrainMesh = new THREE.Mesh(geo, this.makeTerrainMaterial());
-    this.terrainMesh.castShadow = true;
-    this.terrainMesh.receiveShadow = true;
-    this.terrainMesh.frustumCulled = false;
-    this.scene.add(this.terrainMesh);
-
-    // Fluss mit fließender Oberfläche und Schaum
-    const wmat = new THREE.MeshStandardMaterial({ color: '#4a6272', roughness: 0.12, metalness: 0.1, envMapIntensity: 3.2, transparent: true, opacity: 0.92 });
-    const wu = this.waterUniform;
-    wmat.onBeforeCompile = (sh) => {
-      sh.uniforms.uTime = wu;
-      sh.vertexShader = sh.vertexShader
-        .replace('#include <common>', '#include <common>\nvarying vec3 vWPos;')
-        .replace('#include <begin_vertex>', '#include <begin_vertex>\nvWPos = (modelMatrix * vec4(position, 1.0)).xyz;');
-      sh.fragmentShader = sh.fragmentShader
-        .replace('#include <common>', `#include <common>
-          varying vec3 vWPos;
-          uniform float uTime;
-          float h21(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
-          float n21(vec2 p) { vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
-            return mix(mix(h21(i), h21(i + vec2(1, 0)), f.x), mix(h21(i + vec2(0, 1)), h21(i + vec2(1, 1)), f.x), f.y); }`)
-        .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
-          vec2 q = vWPos.xz * vec2(0.05, 0.11) + vec2(uTime * 0.55, 0.0);
-          float r1 = n21(q * 3.0 + vec2(uTime * 0.7, 0.0));
-          float r2 = n21(q * 7.0 - vec2(uTime * 1.3, 0.0));
-          normal = normalize(normal + vec3(r1 - 0.5, 0.0, r2 - 0.5) * 0.42);`)
-        .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
-          float foam = smoothstep(0.74, 0.92, n21(q * 5.0 + vec2(uTime * 1.1, 3.0))) * smoothstep(0.35, 0.8, n21(q * 1.7));
-          totalEmissiveRadiance += vec3(0.75, 0.82, 0.88) * foam * 0.55;`);
-    };
-    const water = new THREE.Mesh(new THREE.PlaneGeometry(GRID_X1 - GRID_X0, 150), wmat);
-    water.rotation.x = -Math.PI / 2;
-    water.position.set((GRID_X0 + GRID_X1) / 2, RIVER_Y + 3, 138);
-    water.receiveShadow = true;
-    this.scene.add(water);
-  }
-
-  /** Höhe der Landschaft an (x,z): Spielfeld bei z=0, dahinter Hügel/Wald, davor Fluss und Ufer. */
-  private heightAt(x: number, z: number): number {
-    const W = WORLD_WIDTH;
-    const xc = Math.max(0, Math.min(W - 1, x));
-    const xi = Math.min(W - 2, Math.floor(xc));
-    const fx = xc - xi;
-    const t = this.terrainRef;
-    const dyn = t ? t.heights[xi] * (1 - fx) + t.heights[xi + 1] * fx : 0;
-    const hs = this.baseH[xi] * (1 - fx) + this.baseH[xi + 1] * fx;
-    const sm = this.smoothH[xi];
-    const xs = x < 0 ? -x : x > W ? x - W : 0;
-    const side = Math.pow(xs / 220, 1.5) * 150;
-    const ss = (a: number, b: number, v: number) => { const k = Math.max(0, Math.min(1, (v - a) / (b - a))); return k * k * (3 - 2 * k); };
-    const hill = 0.5 + 0.25 * Math.sin(x * 0.009 + z * 0.013) + 0.2 * Math.sin(x * 0.021 - z * 0.01 + 1.3) + 0.1 * Math.sin(x * 0.047 + z * 0.03);
-    let S: number;
-    if (z < 0) {
-      const tb = ss(8, 170, -z);
-      const target = sm * 0.3 + 14 + hill * (30 + 0.1 * -z) + (z < -260 ? (-z - 260) * 0.45 : 0);
-      S = hs + (target - hs) * tb;
-    } else {
-      const tf = ss(34, 105, z);
-      const bank = z > 212 ? Math.min(60, (z - 212) * 1.3) + (z > 260 ? 8 * Math.sin(x * 0.02 + z * 0.05) : 0) : 0;
-      const riverbed = RIVER_Y - 4 + 5 * Math.sin(x * 0.03 + z * 0.1) + bank;
-      S = hs + (riverbed - hs) * tf;
-    }
-    const d = (dyn - hs) * Math.exp(-Math.pow(z / 62, 2));
-    return S + d + side;
-  }
-
-  private updateTerrainGrid(): void {
-    const pos = this.terrainGeo.getAttribute('position') as THREE.BufferAttribute;
-    const col = this.terrainGeo.getAttribute('color') as THREE.BufferAttribute;
-    const nx = this.gridXs.length, nz = this.gridZs.length;
-    for (let j = 0; j < nz; j++) {
-      const z = this.gridZs[j];
-      const zf = Math.exp(-Math.pow(z / 75, 2));
-      for (let i = 0; i < nx; i++) {
-        const x = this.gridXs[i];
-        const k = j * nx + i;
-        pos.setXYZ(k, x, this.heightAt(x, z), z);
-        const sc = this.scorch[Math.max(0, Math.min(WORLD_WIDTH, Math.round(x)))] * zf;
-        const b = 1 - 0.78 * Math.min(1, sc);
-        col.setXYZ(k, b, b, b);
-      }
-    }
-    pos.needsUpdate = true;
-    col.needsUpdate = true;
-    this.terrainGeo.computeVertexNormals();
   }
 
   private setupFoliage(): void {
@@ -798,11 +628,12 @@ export class DioramaRenderer {
     this.scene.add(this.tufts);
     for (let i = 0; i < TUFTS; i++) {
       // vorne dichter als hinten
-      this.foliageSeed.push({ x: -80 + Math.random() * (WORLD_WIDTH + 160), z: -150 + Math.random() * 330, s: 4 + Math.random() * 6, r: Math.random() * 6.28 });
+      const f = Math.pow(Math.random(), 0.7);
+      this.foliageSeed.push({ x: Math.random() * WORLD_WIDTH, z: -hd + 5 + f * (TERRAIN_DEPTH - 12), s: 4 + Math.random() * 6, r: Math.random() * 6.28 });
     }
 
     // Felsbrocken
-    const rockTex = this.loadTex('t_cliff.jpg', 1, 1);
+    const rockTex = this.loadTex('dirt.jpg', 1, 1);
     this.rocks = new THREE.InstancedMesh(
       new THREE.IcosahedronGeometry(1, 1),
       new THREE.MeshStandardMaterial({ map: rockTex, bumpMap: rockTex, bumpScale: 2, color: '#b9b2a8', roughness: 0.92, flatShading: true }),
@@ -813,7 +644,7 @@ export class DioramaRenderer {
     this.rocks.frustumCulled = false;
     this.scene.add(this.rocks);
     for (let i = 0; i < ROCKS; i++) {
-      this.rockSeed.push({ x: -100 + Math.random() * (WORLD_WIDTH + 200), z: -260 + Math.random() * 450, s: 3 + Math.pow(Math.random(), 2) * 16, r: Math.random() * 6.28 });
+      this.rockSeed.push({ x: Math.random() * WORLD_WIDTH, z: -hd + 8 + Math.random() * (TERRAIN_DEPTH - 20), s: 2.5 + Math.pow(Math.random(), 2) * 9, r: Math.random() * 6.28 });
     }
 
     // Tannen im Hintergrund
@@ -823,7 +654,7 @@ export class DioramaRenderer {
     this.trees.frustumCulled = false;
     this.scene.add(this.trees);
     for (let i = 0; i < TREES; i++) {
-      this.treeSeed.push({ x: -200 + Math.random() * (WORLD_WIDTH + 400), z: -480 + Math.random() * 350, s: 14 + Math.random() * 22 });
+      this.treeSeed.push({ x: Math.random() * WORLD_WIDTH, z: -hd + 6 + Math.random() * (hd * 0.8), s: 11 + Math.random() * 14 });
     }
   }
 
@@ -863,23 +694,21 @@ export class DioramaRenderer {
     return out;
   }
 
-  private syncFoliage(_sim: GameSimulation): void {
+  private syncFoliage(sim: GameSimulation): void {
+    const t = sim.terrain;
     const m = this.dummy;
-    const sc = (x: number) => this.scorch[Math.max(0, Math.min(WORLD_WIDTH, Math.floor(x)))];
     this.foliageSeed.forEach((f, i) => {
-      const h = this.heightAt(f.x, f.z);
-      const wet = h < RIVER_Y + 10;
-      const burnt = sc(f.x) > 0.4 && Math.abs(f.z) < 70;
-      const fern = f.z > 120 ? 2.6 : 1;
+      const h = t.getHeight(f.x);
       m.position.set(f.x, h - 0.5, f.z);
       m.rotation.set(0, f.r, 0);
-      m.scale.set(f.s * 0.55 * fern, f.s * (wet || burnt ? 0.01 : 1) * fern, f.s * 0.55 * fern);
+      const burnt = this.scorch[Math.max(0, Math.min(WORLD_WIDTH, Math.floor(f.x)))] > 0.4;
+      m.scale.set(f.s * 0.55, f.s * (h < 14 || burnt ? 0.01 : 1), f.s * 0.55);
       m.updateMatrix();
       this.tufts.setMatrixAt(i, m.matrix);
     });
     this.tufts.instanceMatrix.needsUpdate = true;
     this.rockSeed.forEach((r, i) => {
-      const h = this.heightAt(r.x, r.z);
+      const h = t.getHeight(r.x);
       m.position.set(r.x, h + r.s * 0.2, r.z);
       m.rotation.set(r.r, r.r * 1.7, r.r * 0.3);
       m.scale.set(r.s, r.s * 0.65, r.s * 0.85);
@@ -888,7 +717,7 @@ export class DioramaRenderer {
     });
     this.rocks.instanceMatrix.needsUpdate = true;
     this.rubble.forEach((r, i) => {
-      const h = this.heightAt(r.x, r.z);
+      const h = t.getHeight(r.x);
       m.position.set(r.x, h + r.s * 0.15, r.z);
       m.rotation.set(r.r, r.r * 2.1, r.r * 0.6);
       m.scale.set(r.s, r.s * 0.7, r.s * 0.9);
@@ -898,10 +727,10 @@ export class DioramaRenderer {
     this.rubbleMesh.count = this.rubble.length;
     this.rubbleMesh.instanceMatrix.needsUpdate = true;
     this.treeSeed.forEach((tr, i) => {
-      const h = this.heightAt(tr.x, tr.z);
-      const tb = (sc(tr.x) > 0.35 && Math.abs(tr.z) < 70) || h < RIVER_Y + 12 ? 0.01 : 0.5;
+      const h = t.getHeight(tr.x);
       m.position.set(tr.x, h - 1, tr.z);
       m.rotation.set(0, tr.x, 0);
+      const tb = this.scorch[Math.max(0, Math.min(WORLD_WIDTH, Math.floor(tr.x)))] > 0.35 ? 0.01 : 0.5;
       m.scale.set(tr.s * tb, tr.s * tb, tr.s * tb);
       m.updateMatrix();
       this.trees.setMatrixAt(i, m.matrix);
@@ -924,8 +753,8 @@ export class DioramaRenderer {
 
     // Nebelbänke im Tal
     for (let i = 0; i < MISTS; i++) {
-      const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.glowTex, color: '#a9b6c2', transparent: true, opacity: 0.07, depthWrite: false, fog: false }));
-      sp.position.set(Math.random() * WORLD_WIDTH, 40 + Math.random() * 200, -300 + Math.random() * 520);
+      const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.glowTex, color: '#a9b6c2', transparent: true, opacity: 0.16, depthWrite: false, fog: false }));
+      sp.position.set(Math.random() * WORLD_WIDTH, 60 + Math.random() * 190, -130 - Math.random() * 120);
       const s = 330 + Math.random() * 320;
       sp.scale.set(s * 1.8, s * 0.55, 1);
       this.scene.add(sp);
@@ -938,7 +767,6 @@ export class DioramaRenderer {
   private updateAtmosphere(wind: number, dt: number): void {
     this.elapsed += dt;
     this.swayUniform.value = this.elapsed;
-    this.waterUniform.value = this.elapsed;
     this.skyMat.uniforms.time.value = this.elapsed;
     const arr = this.rain.geometry.getAttribute('position') as THREE.BufferAttribute;
     const slant = wind * 1.8 + 40;
@@ -976,8 +804,7 @@ export class DioramaRenderer {
     this.composer.setSize(w, h);
     this.bloomPass.setSize(w, h);
     this.camera.aspect = w / h;
-    this.baseZ = 800 * Math.max(1, 1.45 / this.camera.aspect) * (h < 520 ? 1.0 : 1);
-    this.lookYOff = h < 520 ? 30 : 0;
+    this.baseZ = 1060 * Math.max(1, 1.45 / this.camera.aspect);
     this.camera.updateProjectionMatrix();
   }
 
@@ -993,47 +820,143 @@ export class DioramaRenderer {
   /* ----------------------------- Terrain --------------------------- */
 
   private syncTerrain(sim: GameSimulation): void {
-    if (!this.baseReady) {
-      this.baseH.set(sim.terrain.heights);
-      this.baseH[WORLD_WIDTH] = sim.terrain.heights[WORLD_WIDTH - 1];
-      this.computeSmooth();
-      this.baseReady = true;
-      this.terrainDirtyFlag = true;
+    for (const c of this.scorchDirty) sim.terrain.dirtyChunks.add(c);
+    this.scorchDirty.clear();
+    if (sim.terrain.dirtyChunks.size === 0) return;
+    for (const chunkIdx of sim.terrain.dirtyChunks) {
+      const old = this.chunkMeshes.get(chunkIdx);
+      if (old) {
+        this.scene.remove(old);
+        old.children.forEach((c) => (c as THREE.Mesh).geometry.dispose());
+      }
+      const g = this.buildChunkMesh(sim, chunkIdx);
+      this.scene.add(g);
+      this.chunkMeshes.set(chunkIdx, g);
     }
-    if (sim.terrain.dirtyChunks.size > 0 || this.scorchDirty.size > 0) {
-      this.terrainDirtyFlag = true;
-      sim.terrain.dirtyChunks.clear();
-      this.scorchDirty.clear();
-    }
-    if (!this.terrainDirtyFlag) return;
-    this.terrainDirtyFlag = false;
-    this.updateTerrainGrid();
+    sim.terrain.dirtyChunks.clear();
     this.syncFoliage(sim);
+    for (const side of [-1, 1] as const) {
+      const old = this.ext.get(side);
+      if (old) {
+        this.scene.remove(old);
+        old.children.forEach((c) => (c as THREE.Mesh).geometry.dispose());
+      }
+      const g = this.buildExtension(sim, side);
+      this.scene.add(g);
+      this.ext.set(side, g);
+    }
   }
 
-  private computeSmooth(): void {
-    const W = WORLD_WIDTH;
-    for (let i = 0; i <= W; i++) {
-      let s = 0, n = 0;
-      for (let k = -22; k <= 22; k += 2) {
-        const j = Math.max(0, Math.min(W, i + k));
-        s += this.baseH[j];
-        n++;
+  private buildChunkMesh(sim: GameSimulation, chunkIdx: number): THREE.Group {
+    const t = sim.terrain;
+    const startX = chunkIdx * CHUNK_SIZE;
+    const endX = Math.min(t.width - 1, startX + CHUNK_SIZE);
+    return this.buildSpan((x) => t.getHeight(x), startX, endX);
+  }
+
+  /** Spiegelt das Gelände über die Ränder hinaus und lässt es zu Talwänden ansteigen. */
+  private buildExtension(sim: GameSimulation, side: -1 | 1): THREE.Group {
+    const t = sim.terrain;
+    const W = t.width - 1;
+    const hf = (x: number) => {
+      const d = side < 0 ? -x : x - W;
+      const mx = side < 0 ? Math.min(W, d) : Math.max(0, W - d);
+      return t.getHeight(mx) + Math.pow(Math.max(0, d - 10) / 55, 1.5) * 38;
+    };
+    return side < 0 ? this.buildSpan(hf, -360, 0) : this.buildSpan(hf, W, W + 360);
+  }
+
+  private buildSpan(hf: (x: number) => number, startX: number, endX: number): THREE.Group {
+    const hd = TERRAIN_DEPTH / 2;
+    const LIP = 14;
+
+    const mk = () => ({ pos: [] as number[], nor: [] as number[], col: [] as number[], uv: [] as number[] });
+    const top = mk();
+    const face = mk();
+    let burn = 1;
+    const vert = (g: ReturnType<typeof mk>, x: number, y: number, z: number, n: [number, number, number], u: number, v: number, shade: number) => {
+      shade *= burn;
+      g.pos.push(x, y, z);
+      g.nor.push(n[0], n[1], n[2]);
+      g.uv.push(u, v);
+      g.col.push(shade, shade, shade);
+    };
+
+    const step = 2;
+    for (let x = startX; x < endX; x += step) {
+      const nx = Math.min(endX, x + step);
+      const h1 = hf(x);
+      const h2 = hf(nx);
+      const j = 0.88 + hash(x * 0.5) * 0.24;
+      const sci = Math.max(0, Math.min(WORLD_WIDTH, Math.floor(x)));
+      burn = 1 - 0.74 * Math.min(1, this.scorch[sci] ?? 0);
+      const slope = (a: number) => {
+        const dh = (hf(a + 2) - hf(a - 2)) / 4;
+        const l = Math.hypot(dh, 1);
+        return [-dh / l, 1 / l, 0] as [number, number, number];
+      };
+      const nA = slope(x);
+      const nB = slope(nx);
+      const S = 260; // Texturmaßstab
+
+      // Oberfläche: breites Tal (z = -hd … +hd), nach hinten leicht abgedunkelt (Dunst)
+      const zs = [-hd, -hd * 0.35, hd];
+      const sh = [0.55, 0.9, 1.0];
+      for (let k = 0; k < 2; k++) {
+        const za = zs[k], zb = zs[k + 1];
+        const sa = sh[k] * j, sb = sh[k + 1] * j;
+        vert(top, x, h1, zb, nA, x / S, zb / S, sb);
+        vert(top, nx, h2, zb, nB, nx / S, zb / S, sb);
+        vert(top, nx, h2, za, nB, nx / S, za / S, sa);
+        vert(top, x, h1, zb, nA, x / S, zb / S, sb);
+        vert(top, nx, h2, za, nB, nx / S, za / S, sa);
+        vert(top, x, h1, za, nA, x / S, za / S, sa);
       }
-      this.smoothH[i] = s / n;
+
+      // Grasnarbe an der Vorderkante (Teil des Gras-Meshes)
+      const nF: [number, number, number] = [0, 0, 1];
+      const l1 = h1 - LIP, l2 = h2 - LIP;
+      vert(top, x, l1, hd, nF, x / S, 0.0, 0.5 * j);
+      vert(top, nx, l2, hd, nF, nx / S, 0.0, 0.5 * j);
+      vert(top, nx, h2, hd, nF, nx / S, 0.1, 0.95 * j);
+      vert(top, x, l1, hd, nF, x / S, 0.0, 0.5 * j);
+      vert(top, nx, h2, hd, nF, nx / S, 0.1, 0.95 * j);
+      vert(top, x, h1, hd, nF, x / S, 0.1, 0.95 * j);
+
+      // Erd-/Felsschnitt vorne, nach unten ins Dunkel
+      const lv1 = [l1, l1 * 0.5, 0, -420];
+      const lv2 = [l2, l2 * 0.5, 0, -420];
+      const sd = [0.95, 0.8, 0.55, 0.08];
+      const D = 320;
+      for (let r = 0; r < 3; r++) {
+        const sa = sd[r] * j, sb = sd[r + 1] * j;
+        vert(face, x, lv1[r + 1], hd, nF, x / D, lv1[r + 1] / D, sb);
+        vert(face, nx, lv2[r + 1], hd, nF, nx / D, lv2[r + 1] / D, sb);
+        vert(face, nx, lv2[r], hd, nF, nx / D, lv2[r] / D, sa);
+        vert(face, x, lv1[r + 1], hd, nF, x / D, lv1[r + 1] / D, sb);
+        vert(face, nx, lv2[r], hd, nF, nx / D, lv2[r] / D, sa);
+        vert(face, x, lv1[r], hd, nF, x / D, lv1[r] / D, sa);
+      }
     }
+
+    const group = new THREE.Group();
+    const build = (g: ReturnType<typeof mk>, mat: THREE.Material) => {
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(g.pos, 3));
+      geo.setAttribute('normal', new THREE.Float32BufferAttribute(g.nor, 3));
+      geo.setAttribute('color', new THREE.Float32BufferAttribute(g.col, 3));
+      geo.setAttribute('uv', new THREE.Float32BufferAttribute(g.uv, 2));
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      group.add(mesh);
+    };
+    build(top, this.topMat);
+    build(face, this.faceMat);
+    return group;
   }
 
   /* ----------------------------- Panzer ---------------------------- */
-
-  private extrude(profile: Array<[number, number]>, depth: number, bevel = 0.7): THREE.BufferGeometry {
-    const shape = new THREE.Shape(profile.map(([x, y]) => new THREE.Vector2(x, y)));
-    const g = new THREE.ExtrudeGeometry(shape, {
-      depth: depth - bevel * 2, bevelEnabled: true, bevelThickness: bevel, bevelSize: bevel, bevelSegments: 4, curveSegments: 6,
-    });
-    g.translate(0, 0, -(depth - bevel * 2) / 2);
-    return g;
-  }
 
   private tankImgRequested = false;
   private models: Array<{ body: THREE.BufferGeometry; barrel: THREE.BufferGeometry; img: HTMLImageElement | null } | null> = [null, null];
@@ -1581,8 +1504,8 @@ export class DioramaRenderer {
     const ca = g.getAttribute('color') as THREE.BufferAttribute;
     const rad = (opts.aim.angle * Math.PI) / 180;
     const speed = opts.aim.power * POWER_TO_SPEED;
-    let x = me.x + (opts.aim.angle <= 90 ? PIVOT_X : -PIVOT_X) + Math.cos(rad) * BARREL_LEN;
-    let y = me.y + PIVOT_Y + Math.sin(rad) * BARREL_LEN;
+    let x = me.x + Math.cos(rad) * 16;
+    let y = me.y + 10 + Math.sin(rad) * 16;
     let vx = Math.cos(rad) * speed;
     let vy = Math.sin(rad) * speed;
     const N = pa.count;
@@ -1606,13 +1529,13 @@ export class DioramaRenderer {
   /* ----------------------------- Render ---------------------------- */
 
   public render(sim: GameSimulation, dt: number, opts: RenderOptions): void {
-    this.terrainRef = sim.terrain;
     if (this.lastTerrain !== sim.terrain || this.lastRound !== sim.round) {
       this.lastTerrain = sim.terrain;
       this.lastRound = sim.round;
       this.resetBattlefield();
       sim.terrain.markAllDirty();
     }
+    this.terrainRef = sim.terrain;
     this.windDrift = sim.wind * 0.5;
     this.syncTerrain(sim);
     this.syncTanks(sim, dt);
@@ -1640,8 +1563,8 @@ export class DioramaRenderer {
     const z = this.baseZ * (1 - this.camZoom);
     const bob = Math.sin(this.elapsed * 0.35) * 1.8;
     const sway = Math.sin(this.elapsed * 0.21) * 14;
-    this.camera.position.set(this.camX + sway - 80, 420 + bob - this.camZoom * 30, z);
-    this.camera.lookAt(this.camX * 0.92 + cx * 0.08 - 40, 130 + this.lookYOff - this.camZoom * 25, 0);
+    this.camera.position.set(this.camX + sway - 95, 440 + bob - this.camZoom * 40, z);
+    this.camera.lookAt(this.camX * 0.92 + cx * 0.08 - 60, 175 - this.camZoom * 30, 0);
     if (this.shakeIntensity > 0.2) {
       this.camera.position.x += (Math.random() - 0.5) * this.shakeIntensity;
       this.camera.position.y += (Math.random() - 0.5) * this.shakeIntensity;
