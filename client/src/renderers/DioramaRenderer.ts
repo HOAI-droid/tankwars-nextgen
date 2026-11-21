@@ -37,6 +37,11 @@ interface TankVisual {
   baseColor: THREE.Color;
   dead: boolean;
   wreckTilt: number;
+  sprite: THREE.Mesh;
+  spriteMat: THREE.MeshBasicMaterial;
+  colorHex: string;
+  texReady: boolean;
+  flip: number;
 }
 
 interface Fx {
@@ -74,12 +79,15 @@ interface Cloud {
 }
 
 const TERRAIN_DEPTH = 210;
-const TUFTS = 4200;
+const TUFTS = 2600;
 const ROCKS = 60;
 const TREES = 30;
 const RAIN = 900;
 const MISTS = 14;
-const TANK_SCALE = 1.85;
+const TANK_SCALE = 1.5;
+const PIVOT_X = 10.9;
+const PIVOT_Y = 25.4;
+const BARREL_LEN = 38;
 const MAX_DEBRIS = 260;
 const FIRE_POOL = 420;
 const SMOKE_POOL = 760;
@@ -954,113 +962,127 @@ export class DioramaRenderer {
     return g;
   }
 
+  private tankImg: HTMLImageElement | null = null;
+  private tankTex = new Map<string, THREE.CanvasTexture>();
+  private shadowTex: THREE.CanvasTexture | null = null;
+
+  private loadTankImage(): void {
+    const img = new Image();
+    img.onload = () => (this.tankImg = img);
+    img.src = import.meta.env.BASE_URL + 'tex/tank.png';
+  }
+
+  /** Das Foto-Panzer-Sprite wird pro Team umgefärbt (Rot -> Teamfarbe). */
+  private teamTexture(colorHex: string): THREE.CanvasTexture | null {
+    if (!this.tankImg) return null;
+    const cached = this.tankTex.get(colorHex);
+    if (cached) return cached;
+    const img = this.tankImg;
+    const c = document.createElement('canvas');
+    c.width = img.width;
+    c.height = img.height;
+    const g = c.getContext('2d', { willReadFrequently: true })!;
+    g.drawImage(img, 0, 0);
+    const data = g.getImageData(0, 0, c.width, c.height);
+    const d = data.data;
+    const tc = new THREE.Color(colorHex);
+    const hsl = { h: 0, s: 0, l: 0 };
+    tc.getHSL(hsl);
+    const desat = hsl.s < 0.2;
+    for (let i = 0; i < d.length; i += 4) {
+      const r = d[i] / 255, gg = d[i + 1] / 255, b = d[i + 2] / 255;
+      const mx = Math.max(r, gg, b), mn = Math.min(r, gg, b);
+      const v = mx, sat = mx === 0 ? 0 : (mx - mn) / mx;
+      if (sat < 0.28 || r < gg * 1.1 || r < b * 1.1) continue; // nur rote Lackfläche umfärben
+      const q = new THREE.Color();
+      q.setHSL(hsl.h, desat ? 0.04 : Math.min(1, hsl.s * 0.95), Math.min(0.9, v * (desat ? 1.15 : 0.62) + 0.02));
+      const k = Math.min(1, (sat - 0.28) * 3.5);
+      d[i] = (d[i] * (1 - k) + q.r * 255 * k) | 0;
+      d[i + 1] = (d[i + 1] * (1 - k) + q.g * 255 * k) | 0;
+      d[i + 2] = (d[i + 2] * (1 - k) + q.b * 255 * k) | 0;
+    }
+    g.putImageData(data, 0, 0);
+    const t = new THREE.CanvasTexture(c);
+    t.colorSpace = THREE.SRGBColorSpace;
+    t.anisotropy = 8;
+    this.tankTex.set(colorHex, t);
+    return t;
+  }
+
   private createTankVisual(colorHex: string): TankVisual {
+    if (!this.tankImg && !this.tankImgRequested) {
+      this.tankImgRequested = true;
+      this.loadTankImage();
+    }
     const group = new THREE.Group();
     const body = new THREE.Group();
     group.add(body);
-    const bodyMat = new THREE.MeshStandardMaterial({ color: new THREE.Color(colorHex).multiplyScalar(0.74), roughness: 0.46, metalness: 0.32, envMapIntensity: 0.55 });
+    const paint = new THREE.Color(colorHex).multiplyScalar(0.45);
+    const bodyMat = new THREE.MeshStandardMaterial({ color: paint, roughness: 0.42, metalness: 0.4, envMapIntensity: 0.7 });
     const darkMat = new THREE.MeshStandardMaterial({ color: '#1d2128', roughness: 0.5, metalness: 0.7 });
-    const rubber = new THREE.MeshStandardMaterial({ color: '#17191d', roughness: 0.95, metalness: 0.1 });
-    const wheelMat = new THREE.MeshStandardMaterial({ color: '#2c323b', roughness: 0.55, metalness: 0.7 });
-    const trimMat = new THREE.MeshStandardMaterial({ color: '#aeb5c1', roughness: 0.3, metalness: 0.9 });
-    const lampF = new THREE.MeshStandardMaterial({ color: '#fff3c9', emissive: '#ffd98a', emissiveIntensity: 2.6 });
-    const lampR = new THREE.MeshStandardMaterial({ color: '#ff3b30', emissive: '#ff2a1d', emissiveIntensity: 3.2 });
 
-    const add = (geo: THREE.BufferGeometry, mat: THREE.Material, parent: THREE.Object3D = body) => {
-      const m = new THREE.Mesh(geo, mat);
-      m.castShadow = true;
-      m.receiveShadow = true;
-      parent.add(m);
-      return m;
-    };
+    // Foto-Panzer als Sprite
+    const W = 72, H = W * (270 / 603);
+    const spriteMat = new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false, fog: false, color: '#ffffff', opacity: 0 });
+    const sprite = new THREE.Mesh(new THREE.PlaneGeometry(W, H), spriteMat);
+    sprite.position.set(0, H / 2 - 3, 3);
+    sprite.renderOrder = 2;
+    group.add(sprite);
 
-    // Laufwerk
-    for (const side of [-1, 1]) {
-      const z = side * 8.2;
-      const tr = add(new THREE.BoxGeometry(27, 6.6, 4.6), rubber);
-      tr.position.set(0, 3.6, z);
-      for (const e of [-1, 1]) {
-        const cap = add(new THREE.CylinderGeometry(3.4, 3.4, 4.6, 18), rubber);
-        cap.rotation.x = Math.PI / 2;
-        cap.position.set(e * 13.5, 3.4, z);
-        const sp = add(new THREE.CylinderGeometry(2.1, 2.1, 5.1, 12), wheelMat);
-        sp.rotation.x = Math.PI / 2;
-        sp.position.set(e * 13.5, 3.4, z);
-      }
-      for (let i = -3; i <= 3; i++) {
-        const w = add(new THREE.CylinderGeometry(2.4, 2.4, 5.1, 14), wheelMat);
-        w.rotation.x = Math.PI / 2;
-        w.position.set(i * 3.9, 3.1, z);
-        const hub = add(new THREE.CylinderGeometry(0.95, 0.95, 5.4, 8), trimMat);
-        hub.rotation.x = Math.PI / 2;
-        hub.position.set(i * 3.9, 3.1, z);
-      }
-      // Seitenschürze
-      const skirt = add(this.extrude([[-12, 0], [12, 0], [12, 3.2], [-12, 3.2]], 1.8, 0.4), bodyMat);
-      skirt.position.set(1, 5.6, side * 10.7);
+    // weicher Bodenschatten
+    if (!this.shadowTex) {
+      const c = document.createElement('canvas');
+      c.width = c.height = 64;
+      const g = c.getContext('2d')!;
+      const gr = g.createRadialGradient(32, 32, 2, 32, 32, 32);
+      gr.addColorStop(0, 'rgba(0,0,0,0.75)');
+      gr.addColorStop(1, 'rgba(0,0,0,0)');
+      g.fillStyle = gr;
+      g.fillRect(0, 0, 64, 64);
+      this.shadowTex = new THREE.CanvasTexture(c);
     }
+    const shadow = new THREE.Mesh(new THREE.PlaneGeometry(96, 40), new THREE.MeshBasicMaterial({ map: this.shadowTex, transparent: true, depthWrite: false, fog: false }));
+    shadow.rotation.x = -Math.PI / 2;
+    shadow.position.set(0, 0.6, 2);
+    group.add(shadow);
 
-    // Wanne mit Glacis
-    const hull = add(this.extrude([[-13, 0], [13.6, 0], [15, 3], [11.8, 6.6], [-12.5, 7.2], [-15, 4.2]], 15, 0.9), bodyMat);
-    hull.position.y = 5.4;
-    const deck = add(new THREE.BoxGeometry(11, 0.7, 11), darkMat);
-    deck.position.set(-6.5, 12.9, 0);
-    for (const sz of [-1, 1]) {
-      const hl = add(new THREE.BoxGeometry(1.1, 1.3, 2.4), lampF);
-      hl.position.set(14.6, 9, sz * 5.6);
-      const tl = add(new THREE.BoxGeometry(1, 1.4, 2.2), lampR);
-      tl.position.set(-14.8, 9.4, sz * 5.6);
-    }
-
-    // Turm (bleibt in der Schussebene, damit das Rohr exakt dem Winkel folgt)
-    const turret = new THREE.Group();
-    turret.position.set(-1, 12.2, 0);
-    group.add(turret);
-    add(this.extrude([[-9.5, 0], [8, 0], [10.5, 2.4], [9.2, 5.6], [-2.5, 6.4], [-10, 4.4]], 12.5, 0.8), bodyMat, turret);
-    const cup = add(new THREE.CylinderGeometry(1.9, 2.1, 1.5, 12), darkMat, turret);
-    cup.position.set(-4.5, 7.1, 3);
-    const mg = add(new THREE.CylinderGeometry(0.22, 0.22, 3, 6), darkMat, turret);
-    mg.rotation.z = Math.PI / 2;
-    mg.position.set(-3, 8.2, 3);
-    const ant = add(new THREE.CylinderGeometry(0.12, 0.12, 16, 4), darkMat, turret);
-    ant.position.set(-8, 12, -4);
-    for (let i = 0; i < 3; i++) {
-      const sm = add(new THREE.CylinderGeometry(0.55, 0.55, 1.6, 6), darkMat, turret);
-      sm.rotation.z = Math.PI / 2;
-      sm.position.set(6, 3.8 + i * 0.01, -5.7 + i * 0.9);
-    }
-
+    // Kanone (3D, folgt exakt dem Zielwinkel)
     const gun = new THREE.Group();
-    gun.position.set(0, 3, 0);
-    turret.add(gun);
-    const mantlet = add(new THREE.BoxGeometry(4.2, 4.6, 6.6), bodyMat, gun);
-    mantlet.position.x = 9.5;
+    gun.position.set(PIVOT_X, PIVOT_Y, 4);
+    group.add(gun);
     const barrel = new THREE.Group();
     gun.add(barrel);
-    const tube = add(new THREE.CylinderGeometry(1.25, 1.45, 26, 12), darkMat, barrel);
+    const addB = (geo: THREE.BufferGeometry, mat: THREE.Material) => {
+      const m = new THREE.Mesh(geo, mat);
+      m.castShadow = true;
+      barrel.add(m);
+      return m;
+    };
+    const tube = addB(new THREE.CylinderGeometry(1.15, 1.75, BARREL_LEN, 12), bodyMat);
     tube.rotation.z = -Math.PI / 2;
-    tube.position.x = 24;
-    const sleeve = add(new THREE.CylinderGeometry(1.75, 1.75, 10, 12), bodyMat, barrel);
+    tube.position.x = BARREL_LEN / 2 - 2;
+    const sleeve = addB(new THREE.CylinderGeometry(1.9, 1.9, 10, 12), bodyMat);
     sleeve.rotation.z = -Math.PI / 2;
-    sleeve.position.x = 20;
-    const brake = add(new THREE.CylinderGeometry(1.9, 1.9, 2.6, 12), trimMat, barrel);
+    sleeve.position.x = 9;
+    const brake = addB(new THREE.CylinderGeometry(1.7, 1.7, 3, 12), darkMat);
     brake.rotation.z = -Math.PI / 2;
-    brake.position.x = 37;
+    brake.position.x = BARREL_LEN - 2;
 
     const shield = new THREE.Mesh(
-      new THREE.SphereGeometry(23, 24, 16),
+      new THREE.SphereGeometry(26, 24, 16),
       new THREE.MeshBasicMaterial({
         color: new THREE.Color(0.25, 1.1, 1.7), transparent: true, opacity: 0.22, depthWrite: false,
         blending: THREE.AdditiveBlending, toneMapped: false,
       })
     );
-    shield.position.y = 11;
+    shield.position.y = 14;
     shield.visible = false;
     group.add(shield);
 
     group.scale.setScalar(TANK_SCALE);
-    return { group, gun, barrel, shield, tilt: 0, recoil: 0, smokeT: 0, bodyMat, body, yaw: -0.3, baseColor: bodyMat.color.clone(), dead: false, wreckTilt: 0 };
+    return { group, gun, barrel, shield, tilt: 0, recoil: 0, smokeT: 0, bodyMat, body, yaw: 0, baseColor: bodyMat.color.clone(), dead: false, wreckTilt: 0, sprite, spriteMat, colorHex, texReady: false, flip: 1 };
   }
+  private tankImgRequested = false;
 
   private syncTanks(sim: GameSimulation, dt: number): void {
     const ids = new Set(sim.tanks.map((t) => t.id));
@@ -1086,12 +1108,15 @@ export class DioramaRenderer {
           vis.dead = true;
           vis.wreckTilt = (Math.random() < 0.5 ? -1 : 1) * (0.18 + Math.random() * 0.3);
           vis.bodyMat.color.set('#2b2724');
+          vis.spriteMat.color.set('#3b3531');
           vis.bodyMat.roughness = 0.95;
           vis.bodyMat.metalness = 0.15;
           vis.shield.visible = false;
           this.burners.push({ x: tank.x, z: 0, t: 0, dur: 30, acc: 0, kind: 'flame', size: 9 }, { x: tank.x, z: 0, t: 0, dur: 30, acc: 0, kind: 'smoke', size: 12 });
         }
         vis.group.visible = true;
+        if (!vis.texReady) { const tx = this.teamTexture(vis.colorHex); if (tx) { vis.spriteMat.map = tx; vis.spriteMat.opacity = 1; vis.spriteMat.needsUpdate = true; vis.texReady = true; } }
+        vis.gun.position.x = PIVOT_X * vis.flip;
         const gy = t.getHeight(tank.x);
         const sl = Math.atan2(t.getHeight(tank.x + 9) - t.getHeight(tank.x - 9), 18);
         vis.group.position.set(tank.x, gy - 1.5, 0);
@@ -1102,6 +1127,7 @@ export class DioramaRenderer {
       if (vis.dead) {
         vis.dead = false;
         vis.bodyMat.color.copy(vis.baseColor);
+        vis.spriteMat.color.set('#ffffff');
         vis.bodyMat.roughness = 0.46;
         vis.bodyMat.metalness = 0.32;
       }
@@ -1111,9 +1137,10 @@ export class DioramaRenderer {
       vis.group.position.set(tank.x, tank.y, 0);
       vis.group.rotation.z = vis.tilt;
       vis.gun.rotation.z = (tank.angle * Math.PI) / 180 - vis.tilt;
-      const targetYaw = tank.angle <= 90 ? -0.32 : Math.PI + 0.32;
-      vis.yaw += (targetYaw - vis.yaw) * Math.min(1, dt * 6);
-      vis.body.rotation.y = vis.yaw;
+      if (!vis.texReady) { const tx = this.teamTexture(vis.colorHex); if (tx) { vis.spriteMat.map = tx; vis.spriteMat.opacity = 1; vis.spriteMat.needsUpdate = true; vis.texReady = true; } }
+      vis.flip = tank.angle <= 90 ? 1 : -1;
+      vis.sprite.scale.x = vis.flip;
+      vis.gun.position.x = PIVOT_X * vis.flip;
       vis.recoil = Math.max(0, vis.recoil - dt * 4);
       vis.barrel.position.x = -vis.recoil * 6;
 
@@ -1138,8 +1165,8 @@ export class DioramaRenderer {
       if (!tank || !vis) continue;
       vis.recoil = 1;
       const a = (tank.angle * Math.PI) / 180;
-      const tx = tank.x + Math.cos(a) * 62;
-      const ty = tank.y + 28 + Math.sin(a) * 62;
+      const tx = tank.x + (tank.angle <= 90 ? PIVOT_X : -PIVOT_X) * TANK_SCALE + Math.cos(a) * BARREL_LEN * TANK_SCALE;
+      const ty = tank.y + PIVOT_Y * TANK_SCALE + Math.sin(a) * BARREL_LEN * TANK_SCALE;
       this.emitFire(tx, ty, 0, Math.cos(a) * 60, Math.sin(a) * 60, 0, 0.14, 8, 22, '#fff2c0', '#ff9a3a', 1);
       for (let i = 0; i < 5; i++) {
         this.emitSmoke(tx, ty, 0, Math.cos(a) * (30 + Math.random() * 50) + (Math.random() - 0.5) * 25, Math.sin(a) * (30 + Math.random() * 50) + 8, (Math.random() - 0.5) * 20, 0.8 + Math.random() * 0.5, 4, 14, '#bdb6ad', 0.5);
@@ -1447,8 +1474,8 @@ export class DioramaRenderer {
     const ca = g.getAttribute('color') as THREE.BufferAttribute;
     const rad = (opts.aim.angle * Math.PI) / 180;
     const speed = opts.aim.power * POWER_TO_SPEED;
-    let x = me.x + Math.cos(rad) * 16;
-    let y = me.y + 10 + Math.sin(rad) * 16;
+    let x = me.x + (opts.aim.angle <= 90 ? 16 : -16) + Math.cos(rad) * 57;
+    let y = me.y + 38 + Math.sin(rad) * 57;
     let vx = Math.cos(rad) * speed;
     let vy = Math.sin(rad) * speed;
     const N = pa.count;

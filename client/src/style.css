@@ -377,3 +377,24 @@ input[type='range']::-moz-range-thumb { width: 14px; height: 20px; background: v
 #turn-info { font-size: 16px; letter-spacing: 1.5px; }
 .logo h1, .code-big, .shop-head h2, .cash { font-family: var(--ui); font-weight: 700; }
 .logo h1 { letter-spacing: 6px; }
+
+/* ---------- Direktes Zielen (Ziehen) & Touch-Bedienung ---------- */
+#viewport { touch-action: none; cursor: crosshair; }
+#drag-line { position: fixed; display: none; height: 0; transform-origin: 0 0; border-top: 3px dashed rgba(255, 196, 87, 0.9); pointer-events: none; z-index: 8; filter: drop-shadow(0 0 6px rgba(255, 138, 61, 0.9)); }
+#drag-line i { position: absolute; right: -9px; top: -10px; width: 18px; height: 18px; border-radius: 50%; border: 3px solid #ffc457; background: rgba(255, 138, 61, 0.35); }
+@media (pointer: coarse) {
+  .step { display: inline-flex !important; align-items: center; justify-content: center; width: 46px; height: 46px; font-size: 24px; }
+  input[type='range'] { height: 46px; }
+  input[type='range']::-webkit-slider-thumb { width: 26px; height: 34px; margin-top: -15px; }
+  input[type='range']::-moz-range-thumb { width: 24px; height: 32px; }
+  input[type='range']::-webkit-slider-runnable-track { height: 8px; border-radius: 4px; }
+  .fire { width: 130px; min-height: 64px; }
+  #deck { gap: 10px; padding: 8px 12px; }
+  .wcard { min-width: 84px; padding: 10px; }
+  .gauge-label { display: block; }
+}
+@media (pointer: coarse) and (max-height: 520px) {
+  #deck { flex-wrap: nowrap; }
+  .dial, .meter { width: 48px; height: 48px; }
+  #weapons { flex: 1.3 1 0; }
+}

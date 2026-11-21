@@ -435,6 +435,57 @@ function fire(): void {
 
 btnFire.addEventListener('click', fire);
 
+/* Direkt zielen: auf dem Spielfeld ziehen wie bei einer Steinschleuder
+   (vom Panzer weg ziehen = Richtung + Kraft). Ideal fürs Handy. */
+const viewportEl = $('viewport');
+const dragLine = document.createElement('div');
+dragLine.id = 'drag-line';
+dragLine.innerHTML = '<i></i>';
+document.body.appendChild(dragLine);
+let dragging = false;
+
+function canAim(): boolean {
+  const me = getMyTank();
+  if (!me || !me.alive || sim.phase !== 'PLANNING' || role === 'demo' || menu.visible || shop.isOpen) return false;
+  if (sim.mode === 'SIMULTANEOUS') return !me.ready;
+  return sim.tanks[sim.activeTankIndex]?.id === myTankId;
+}
+
+function applyDrag(e: PointerEvent): void {
+  const me = getMyTank();
+  if (!me) return;
+  const sp = diorama.project(me.x, me.y + 38);
+  const dx = sp.x - e.clientX;
+  const dy = e.clientY - sp.y;
+  let deg = (Math.atan2(dy, dx) * 180) / Math.PI;
+  if (deg < 0) deg = dx >= 0 ? 0 : 180;
+  const d = Math.hypot(dx, dy);
+  const ref = Math.min(window.innerWidth, window.innerHeight) * 0.42;
+  const power = Math.max(10, Math.min(100, 10 + (d / ref) * 90));
+  inputAngle.value = String(Math.round(Math.max(0, Math.min(180, deg))));
+  inputPower.value = String(Math.round(power));
+  syncAimUi();
+  const len = Math.hypot(e.clientX - sp.x, e.clientY - sp.y);
+  const ang = Math.atan2(e.clientY - sp.y, e.clientX - sp.x);
+  dragLine.style.cssText = `display:block;left:${sp.x}px;top:${sp.y}px;width:${len}px;transform:rotate(${ang}rad)`;
+}
+
+viewportEl.addEventListener('pointerdown', (e) => {
+  if (!canAim()) return;
+  dragging = true;
+  viewportEl.setPointerCapture(e.pointerId);
+  applyDrag(e);
+});
+viewportEl.addEventListener('pointermove', (e) => {
+  if (dragging) applyDrag(e);
+});
+const endDrag = () => {
+  dragging = false;
+  dragLine.style.display = 'none';
+};
+viewportEl.addEventListener('pointerup', endDrag);
+viewportEl.addEventListener('pointercancel', endDrag);
+
 window.addEventListener('keydown', (e) => {
   if (menu.visible || shop.isOpen) return;
   const el = e.target as HTMLElement;
@@ -529,7 +580,7 @@ function updateWorldUi(): void {
   for (const t of sim.tanks) {
     const prev = prevHp.get(t.id);
     if (prev !== undefined && t.hp < prev - 0.5 && !isRetro) {
-      const p = diorama.project(t.x, t.y + 62);
+      const p = diorama.project(t.x, t.y + 78);
       spawnFloater(`-${Math.round(prev - t.hp)}`, p.x, p.y);
     }
     prevHp.set(t.id, t.hp);
@@ -549,7 +600,7 @@ function updateWorldUi(): void {
     el.className = `plate${t.id === myTankId ? ' me' : ''}${t.ready ? ' ready' : ''}`;
     el.style.display = t.alive ? '' : 'none';
     if (!t.alive || isRetro) continue;
-    const p = diorama.project(t.x, t.y + 46);
+    const p = diorama.project(t.x, t.y + 62);
     el.style.left = `${p.x}px`;
     el.style.top = `${p.y}px`;
     const nm = el.firstElementChild as HTMLElement;
@@ -605,7 +656,7 @@ function updateHud(): void {
     if (sim.phase === 'RESOLVING') info = 'GESCHOSSE UNTERWEGS';
     else if (!me?.alive) info = 'AUSGESCHIEDEN – ZUSCHAUEN';
     else if (me.ready) info = 'BEREIT – WARTE AUF ANDERE';
-    else info = 'ZIEL EINSTELLEN';
+    else info = 'ZIEHEN ZUM ZIELEN';
     disabled = !me?.alive || sim.phase !== 'PLANNING' || !!me?.ready;
   } else {
     info = sim.phase === 'RESOLVING' ? 'GESCHOSS UNTERWEGS' : `AM ZUG: ${(active?.name ?? '').toUpperCase()}`;
