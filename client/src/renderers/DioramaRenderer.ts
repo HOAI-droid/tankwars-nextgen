@@ -30,7 +30,7 @@ interface TankVisual {
   tilt: number;
   recoil: number;
   smokeT: number;
-  bodyMat: THREE.MeshStandardMaterial;
+  bodyMat: THREE.MeshBasicMaterial;
   body: THREE.Group;
   yaw: number;
   baseColor: THREE.Color;
@@ -87,9 +87,10 @@ const TREES = 150;
 const RAIN = 900;
 const MISTS = 7;
 const TANK_SCALE = 1.5;
-const PIVOT_X = 14.7;
-const PIVOT_Y = 25.4;
-const BARREL_LEN = 38;
+const PIVOT_X = 17.6;
+const PIVOT_Y = 25.3;
+const BARREL_LEN = 46.2;
+const HULL_W = 79;
 const MAX_DEBRIS = 260;
 const FIRE_POOL = 420;
 const SMOKE_POOL = 760;
@@ -404,7 +405,7 @@ export class DioramaRenderer {
       this.scene.add(sp);
       this.blasts.push({ sprite: sp, active: false, life: 0, maxLife: 1, size: 1, spin: 0 });
     }
-    const rockTex2 = this.loadTex('dirt.jpg');
+    const rockTex2 = this.loadTex('t_cliff.jpg');
     this.rubbleMesh = new THREE.InstancedMesh(
       new THREE.IcosahedronGeometry(1, 1),
       new THREE.MeshStandardMaterial({ map: rockTex2, bumpMap: rockTex2, bumpScale: 2, color: '#6d655d', roughness: 0.95, flatShading: true }),
@@ -574,12 +575,13 @@ export class DioramaRenderer {
   }
 
   private makeTerrainMaterial(): THREE.MeshStandardMaterial {
-    const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9, metalness: 0 });
-    const g = this.loadTex('grass_detail.jpg');
-    const r = this.loadTex('rock_detail.jpg');
+    const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.92, metalness: 0 });
+    const T = {
+      tA: this.loadTex('t_grass_a.jpg'), tB: this.loadTex('t_grass_b.jpg'), tM: this.loadTex('t_moss.jpg'),
+      tK: this.loadTex('t_cliff.jpg'), tD: this.loadTex('t_mud.jpg'), tC: this.loadTex('t_crater.jpg'),
+    };
     mat.onBeforeCompile = (sh) => {
-      sh.uniforms.gMap = { value: g };
-      sh.uniforms.rMap = { value: r };
+      for (const [k, v] of Object.entries(T)) sh.uniforms[k] = { value: v };
       sh.vertexShader = sh.vertexShader
         .replace('#include <common>', '#include <common>\nvarying vec3 vWPos;\nvarying vec3 vWNor;')
         .replace('#include <begin_vertex>', '#include <begin_vertex>\nvWPos = (modelMatrix * vec4(position, 1.0)).xyz;\nvWNor = normalize(mat3(modelMatrix) * normal);');
@@ -589,20 +591,19 @@ export class DioramaRenderer {
           `#include <common>
           varying vec3 vWPos;
           varying vec3 vWNor;
-          uniform sampler2D gMap;
-          uniform sampler2D rMap;
+          uniform sampler2D tA; uniform sampler2D tB; uniform sampler2D tM;
+          uniform sampler2D tK; uniform sampler2D tD; uniform sampler2D tC;
           float h21(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
           float n21(vec2 p) { vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
             return mix(mix(h21(i), h21(i + vec2(1, 0)), f.x), mix(h21(i + vec2(0, 1)), h21(i + vec2(1, 1)), f.x), f.y); }
-          vec3 det(sampler2D t, vec2 p) {
-            vec2 a = p / 190.0;
-            vec2 b = mat2(0.8, -0.6, 0.6, 0.8) * p / 83.0 + 17.3;
-            vec2 c = mat2(0.6, 0.8, -0.8, 0.6) * p / 37.0 + 5.1;
-            vec3 ta = mix(vec3(0.5), texture2D(t, a).rgb, 0.75), tb = mix(vec3(0.5), texture2D(t, b).rgb, 0.7), tc = mix(vec3(0.5), texture2D(t, c).rgb, 0.7);
-            return ta * (0.55 + tb * 0.9) * (0.7 + tc * 0.6) * 2.0;
+          // zwei verdrehte/skalierte Abtastungen, per Rauschen gemischt -> keine sichtbare Kachelung
+          vec3 st(sampler2D t, vec2 p, float s) {
+            vec3 a = texture2D(t, p / s).rgb;
+            vec3 b = texture2D(t, mat2(0.8, -0.6, 0.6, 0.8) * p / (s * 0.57) + 13.7).rgb;
+            return mix(a, b, smoothstep(0.3, 0.7, n21(p * 0.012 + 3.1)));
           }
-          vec3 tri(sampler2D t, vec3 p, vec3 w, float s) {
-            return det(t, p.zy) * w.x + det(t, p.xz) * w.y + det(t, p.xy) * w.z;
+          vec3 tri3(sampler2D t, vec3 p, vec3 w, float s) {
+            return texture2D(t, p.zy / s).rgb * w.x + st(t, p.xz, s) * w.y + texture2D(t, p.xy / s).rgb * w.z;
           }`
         )
         .replace(
@@ -610,21 +611,25 @@ export class DioramaRenderer {
           `vec3 nn = normalize(vWNor);
            vec3 w = pow(abs(nn), vec3(4.0)); w /= (w.x + w.y + w.z);
            float slope = 1.0 - nn.y;
-           float nz = n21(vWPos.xz * 0.018) * 0.55 + n21(vWPos.xz * 0.06) * 0.3 + n21(vWPos.xz * 0.2) * 0.15;
-           float rock = smoothstep(0.16, 0.4, slope + (nz - 0.5) * 0.28);
-           float lo = n21(vWPos.xz * 0.006 + vWPos.y * 0.004);
-           float mi = n21(vWPos.xz * 0.031 + 7.0);
-           vec3 gBase = mix(vec3(0.17, 0.25, 0.09), vec3(0.36, 0.40, 0.15), smoothstep(0.25, 0.75, mi * 0.6 + lo * 0.4));
-           gBase = mix(gBase, vec3(0.30, 0.24, 0.13), smoothstep(0.7, 0.9, lo) * 0.6);
-           vec3 gc = gBase * 0.3 * tri(gMap, vWPos, w, 1.0);
-           vec3 rBase = mix(vec3(0.28, 0.25, 0.22), vec3(0.45, 0.40, 0.34), smoothstep(0.2, 0.8, mi));
-           rBase = mix(rBase, vec3(0.36, 0.27, 0.19), smoothstep(0.55, 0.85, lo) * 0.7);
-           vec3 rc = rBase * 0.36 * tri(rMap, vWPos, w, 1.0);
-           vec3 moss = mix(rc, rc * vec3(0.55, 1.0, 0.4) * 1.3, smoothstep(0.5, 0.85, nz) * 0.7 * (1.0 - smoothstep(0.45, 0.75, slope)));
-           vec3 col = mix(gc, moss, rock);
-           float mud = 1.0 - smoothstep(24.0, 46.0, vWPos.y);
-           col = mix(col, col * vec3(0.5, 0.46, 0.42), mud * 0.85);
-           diffuseColor.rgb *= col;`
+           vec2 xz = vWPos.xz;
+           float nz = n21(xz * 0.018) * 0.55 + n21(xz * 0.06) * 0.3 + n21(xz * 0.2) * 0.15;
+           float lo = n21(xz * 0.006 + vWPos.y * 0.004);
+           float mi = n21(xz * 0.031 + 7.0);
+           vec3 grass = mix(st(tA, xz, 300.0), st(tB, xz, 260.0), smoothstep(0.35, 0.65, lo * 0.6 + mi * 0.4));
+           vec3 moss = tri3(tM, vWPos, w, 280.0);
+           vec3 cliff = tri3(tK, vWPos, w, 340.0);
+           vec3 mud = st(tD, xz, 280.0);
+           vec3 crater = st(tC, xz, 240.0);
+           float rock = smoothstep(0.2, 0.46, slope + (nz - 0.5) * 0.25);
+           vec3 flat1 = mix(grass, moss, smoothstep(0.5, 0.85, mi) * 0.85);
+           vec3 steep = mix(cliff, moss, smoothstep(0.55, 0.9, nz) * 0.35 * (1.0 - smoothstep(0.55, 0.8, slope)));
+           vec3 col = mix(flat1, steep, rock);
+           float wet = 1.0 - smoothstep(26.0, 54.0, vWPos.y);
+           float patch1 = smoothstep(0.78, 0.9, n21(xz * 0.011 + 9.0)) * (1.0 - rock);
+           col = mix(col, mud, clamp(wet * 0.9 + patch1 * 0.75, 0.0, 1.0));
+           float sc = clamp((1.0 - vColor.r) / 0.78, 0.0, 1.0);
+           col = mix(col, crater * 0.9, smoothstep(0.1, 0.5, sc));
+           diffuseColor.rgb *= col * 0.92;`
         );
     };
     return mat;
@@ -632,11 +637,11 @@ export class DioramaRenderer {
 
   private setupStage(): void {
     // Foto-Backdrop (Berge/Wald/Nebel aus dem Konzeptbild)
-    const bd = this.loadTex('backdrop.webp');
+    const bd = this.loadTex('backdrop_full.webp');
     bd.wrapS = bd.wrapT = THREE.ClampToEdgeWrapping;
-    const bw = 2500, bh = bw * (580 / 1600);
-    const plate = new THREE.Mesh(new THREE.PlaneGeometry(bw, bh), new THREE.MeshBasicMaterial({ map: bd, transparent: true, depthWrite: false, fog: false, color: '#dfe5ee' }));
-    plate.position.set(WORLD_WIDTH / 2, 60 + bh / 2, -820);
+    const bw = 3600, bh = bw * (1339 / 2400);
+    const plate = new THREE.Mesh(new THREE.PlaneGeometry(bw, bh), new THREE.MeshBasicMaterial({ map: bd, depthWrite: false, fog: false, color: '#e8ecf2' }));
+    plate.position.set(WORLD_WIDTH / 2, 420, -900);
     plate.renderOrder = -5;
     this.scene.add(plate);
 
@@ -793,7 +798,7 @@ export class DioramaRenderer {
     }
 
     // Felsbrocken
-    const rockTex = this.loadTex('dirt.jpg', 1, 1);
+    const rockTex = this.loadTex('t_cliff.jpg', 1, 1);
     this.rocks = new THREE.InstancedMesh(
       new THREE.IcosahedronGeometry(1, 1),
       new THREE.MeshStandardMaterial({ map: rockTex, bumpMap: rockTex, bumpScale: 2, color: '#b9b2a8', roughness: 0.92, flatShading: true }),
@@ -1026,198 +1031,87 @@ export class DioramaRenderer {
     return g;
   }
 
-  private tankImgRequested = true;
-  private gnomeTex: THREE.CanvasTexture | null = null;
+  private tankImgRequested = false;
+  private tankImgs: { hull: HTMLImageElement | null; barrel: HTMLImageElement | null } = { hull: null, barrel: null };
+  private tankTex = new Map<string, THREE.CanvasTexture>();
+  private shadowTex: THREE.CanvasTexture | null = null;
 
-  /** Lack-Textur mit Schmutz, Kratzern und Paneelfugen (macht die Panzer plastisch). */
-  private grimeTexture(): THREE.CanvasTexture {
-    if (this.gnomeTex) return this.gnomeTex;
+  private loadTankImages(): void {
+    const base = import.meta.env.BASE_URL + 'tex/';
+    for (const k of ['hull', 'barrel'] as const) {
+      const img = new Image();
+      img.onload = () => (this.tankImgs[k] = img);
+      img.src = base + (k === 'hull' ? 'tank_hull.png' : 'tank_barrel.png');
+    }
+  }
+
+  /** Foto-Panzer pro Team umfärben (rote Lackfläche -> Teamfarbe). */
+  private teamTexture(colorHex: string, which: 'hull' | 'barrel'): THREE.CanvasTexture | null {
+    const img = this.tankImgs[which];
+    if (!img) return null;
+    const key = colorHex + which;
+    const cached = this.tankTex.get(key);
+    if (cached) return cached;
     const c = document.createElement('canvas');
-    c.width = c.height = 256;
-    const g = c.getContext('2d')!;
-    g.fillStyle = '#d8d8d8';
-    g.fillRect(0, 0, 256, 256);
-    for (let i = 0; i < 520; i++) {
-      const x = Math.random() * 256, y = Math.random() * 256, r = 2 + Math.random() * 16;
-      const gr = g.createRadialGradient(x, y, 0, x, y, r);
-      const a = Math.random() * 0.22;
-      gr.addColorStop(0, `rgba(${Math.random() < 0.5 ? '40,34,28' : '255,255,255'},${a})`);
-      gr.addColorStop(1, 'rgba(0,0,0,0)');
-      g.fillStyle = gr;
-      g.fillRect(x - r, y - r, r * 2, r * 2);
+    c.width = img.width;
+    c.height = img.height;
+    const g = c.getContext('2d', { willReadFrequently: true })!;
+    g.drawImage(img, 0, 0);
+    const data = g.getImageData(0, 0, c.width, c.height);
+    const d = data.data;
+    const hsl = { h: 0, s: 0, l: 0 };
+    new THREE.Color(colorHex).getHSL(hsl);
+    const desat = hsl.s < 0.2;
+    const q = new THREE.Color();
+    const isRed = colorHex.toLowerCase() === '#ff4d4d';
+    if (!isRed) {
+      for (let i = 0; i < d.length; i += 4) {
+        const r = d[i] / 255, gg = d[i + 1] / 255, b = d[i + 2] / 255;
+        const mx = Math.max(r, gg, b), mn = Math.min(r, gg, b);
+        const sat = mx === 0 ? 0 : (mx - mn) / mx;
+        if (sat < 0.32 || r < gg * 1.25 || r < b * 1.2) continue;
+        q.setHSL(hsl.h, desat ? 0.05 : Math.min(1, hsl.s * 0.72), Math.min(0.9, mx * (desat ? 1.2 : 0.78)));
+        const k = Math.min(1, (sat - 0.32) * 4);
+        d[i] = (d[i] * (1 - k) + q.r * 255 * k) | 0;
+        d[i + 1] = (d[i + 1] * (1 - k) + q.g * 255 * k) | 0;
+        d[i + 2] = (d[i + 2] * (1 - k) + q.b * 255 * k) | 0;
+      }
+      g.putImageData(data, 0, 0);
     }
-    g.strokeStyle = 'rgba(255,255,255,0.18)';
-    for (let i = 0; i < 160; i++) {
-      const x = Math.random() * 256, y = Math.random() * 256;
-      g.beginPath(); g.moveTo(x, y); g.lineTo(x + (Math.random() - 0.5) * 24, y + (Math.random() - 0.5) * 10); g.stroke();
-    }
-    // Schlamm unten
-    const mud = g.createLinearGradient(0, 170, 0, 256);
-    mud.addColorStop(0, 'rgba(60,45,30,0)');
-    mud.addColorStop(1, 'rgba(60,45,30,0.55)');
-    g.fillStyle = mud;
-    g.fillRect(0, 170, 256, 86);
     const t = new THREE.CanvasTexture(c);
-    t.wrapS = t.wrapT = THREE.RepeatWrapping;
     t.colorSpace = THREE.SRGBColorSpace;
     t.anisotropy = 8;
-    this.gnomeTex = t;
+    this.tankTex.set(key, t);
     return t;
   }
 
+  private ensureTankTex(vis: TankVisual): void {
+    if (vis.texReady) return;
+    const th = this.teamTexture(vis.colorHex, 'hull');
+    const tb = this.teamTexture(vis.colorHex, 'barrel');
+    if (!th || !tb) return;
+    vis.spriteMat.map = th;
+    vis.spriteMat.opacity = 1;
+    vis.spriteMat.needsUpdate = true;
+    vis.bodyMat.map = tb;
+    vis.bodyMat.opacity = 1;
+    vis.bodyMat.needsUpdate = true;
+    vis.texReady = true;
+  }
+
   private createTankVisual(colorHex: string): TankVisual {
+    if (!this.tankImgRequested) {
+      this.tankImgRequested = true;
+      this.loadTankImages();
+    }
     const group = new THREE.Group();
-    const body = new THREE.Group();
-    body.scale.setScalar(1.7);
-    group.add(body);
-    const grime = this.grimeTexture();
-    const bodyMat = new THREE.MeshStandardMaterial({ color: new THREE.Color(colorHex).multiplyScalar(0.8), map: grime, bumpMap: grime, bumpScale: 0.6, roughness: 0.42, metalness: 0.45, envMapIntensity: 1.3 });
-    const darkMat = new THREE.MeshStandardMaterial({ color: '#1a1d23', map: grime, roughness: 0.55, metalness: 0.75, envMapIntensity: 1.1 });
-    const rubber = new THREE.MeshStandardMaterial({ color: '#15171a', roughness: 0.95, metalness: 0.05, map: grime });
-    const wheelMat = new THREE.MeshStandardMaterial({ color: '#2a3038', roughness: 0.5, metalness: 0.75, envMapIntensity: 1.2 });
-    const trimMat = new THREE.MeshStandardMaterial({ color: '#b3bac6', roughness: 0.28, metalness: 0.95, envMapIntensity: 1.5 });
-    const lampF = new THREE.MeshStandardMaterial({ color: '#fff3c9', emissive: '#ffd98a', emissiveIntensity: 3 });
-    const lampR = new THREE.MeshStandardMaterial({ color: '#ff3b30', emissive: '#ff2a1d', emissiveIntensity: 3.6 });
+    const H = HULL_W * (387 / 786);
+    const spriteMat = new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false, fog: false, color: '#dfe3ea', opacity: 0, side: THREE.DoubleSide });
+    const sprite = new THREE.Mesh(new THREE.PlaneGeometry(HULL_W, H), spriteMat);
+    sprite.position.set(0, H / 2 - 2, 3);
+    sprite.renderOrder = 2;
+    group.add(sprite);
 
-    const add = (geo: THREE.BufferGeometry, mat: THREE.Material, parent: THREE.Object3D = body) => {
-      const m = new THREE.Mesh(geo, mat);
-      m.castShadow = true;
-      m.receiveShadow = true;
-      parent.add(m);
-      return m;
-    };
-
-    // Laufwerk
-    for (const side of [-1, 1]) {
-      const z = side * 8.4;
-      const tr = add(new THREE.BoxGeometry(27, 6.8, 4.8), rubber);
-      tr.position.set(0, 3.7, z);
-      for (let i = -13; i <= 13; i++) {
-        const link = add(new THREE.BoxGeometry(0.55, 7.2, 5.1), darkMat);
-        link.position.set(i, 3.7, z);
-      }
-      for (const e of [-1, 1]) {
-        const cap = add(new THREE.CylinderGeometry(3.5, 3.5, 4.8, 18), rubber);
-        cap.rotation.x = Math.PI / 2;
-        cap.position.set(e * 13.5, 3.5, z);
-        const sp = add(new THREE.CylinderGeometry(2.2, 2.2, 5.3, 12), wheelMat);
-        sp.rotation.x = Math.PI / 2;
-        sp.position.set(e * 13.5, 3.5, z);
-      }
-      for (let i = -3; i <= 3; i++) {
-        const w = add(new THREE.CylinderGeometry(2.5, 2.5, 5.3, 14), wheelMat);
-        w.rotation.x = Math.PI / 2;
-        w.position.set(i * 3.9, 3.2, z);
-        const hub = add(new THREE.CylinderGeometry(1, 1, 5.6, 8), trimMat);
-        hub.rotation.x = Math.PI / 2;
-        hub.position.set(i * 3.9, 3.2, z);
-      }
-      // Seitenschürze in Segmenten + Kotflügel
-      for (let i = 0; i < 5; i++) {
-        const sk = add(this.extrude([[-2.3, 0], [2.3, 0], [2.3, 3.6], [-2.3, 3.6]], 1.6, 0.3), bodyMat);
-        sk.position.set(-9.6 + i * 4.85, 6, side * 11);
-      }
-      const fender = add(new THREE.BoxGeometry(29, 0.8, 5.4), bodyMat);
-      fender.position.set(0, 9.9, z);
-      const bin = add(new THREE.BoxGeometry(5, 2.2, 2.4), darkMat);
-      bin.position.set(-9, 11.2, side * 9.2);
-    }
-
-    // Wanne mit steilem Glacis
-    const hull = add(this.extrude([[-13.5, 0], [14, 0], [15.4, 3], [12, 6.8], [-12.5, 7.4], [-15.4, 4.4]], 15.5, 0.9), bodyMat);
-    hull.position.y = 5.6;
-    const deck = add(new THREE.BoxGeometry(11, 0.7, 11), darkMat);
-    deck.position.set(-6.5, 13.2, 0);
-    const vents = add(new THREE.BoxGeometry(6, 0.6, 8), darkMat);
-    vents.position.set(-10, 13.7, 0);
-    for (const sz of [-1, 1]) {
-      const hl = add(new THREE.BoxGeometry(1.2, 1.4, 2.6), lampF);
-      hl.position.set(15, 9.4, sz * 5.8);
-      const tl = add(new THREE.BoxGeometry(1, 1.5, 2.3), lampR);
-      tl.position.set(-15.6, 9.8, sz * 5.8);
-      const glowF = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.glowTex, color: '#ffe2a0', transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, opacity: 0.8, fog: false }));
-      glowF.scale.set(6, 6, 1);
-      glowF.position.set(16.5, 9.4, sz * 5.8);
-      body.add(glowF);
-      const glowR = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.glowTex, color: '#ff3020', transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, opacity: 0.95, fog: false }));
-      glowR.scale.set(5.5, 5.5, 1);
-      glowR.position.set(-16.6, 9.8, sz * 5.8);
-      body.add(glowR);
-    }
-    // reaktive Panzerung auf dem Glacis
-    for (let i = 0; i < 3; i++) {
-      const era = add(new THREE.BoxGeometry(2.6, 1.2, 12), bodyMat);
-      era.position.set(9 + i * 1.6, 11.6 - i * 1.1, 0);
-      era.rotation.z = -0.55;
-    }
-
-    // Turm (Teil des gedrehten Rumpfes)
-    const turret = new THREE.Group();
-    turret.position.set(-1, 13.1, 0);
-    body.add(turret);
-    add(this.extrude([[-9.8, 0], [8.4, 0], [11, 2.5], [9.8, 5.8], [-2.5, 6.6], [-10.4, 4.6]], 13, 0.8), bodyMat, turret);
-    for (const sz of [-1, 1]) {
-      const wedge = add(this.extrude([[0, 0], [5.5, 0], [6.5, 4.5], [1, 5.2]], 1.8, 0.3), bodyMat, turret);
-      wedge.position.set(5.2, 0.8, sz * 6.8);
-    }
-    const cup = add(new THREE.CylinderGeometry(2, 2.2, 1.7, 14), darkMat, turret);
-    cup.position.set(-4.5, 7.3, 3.2);
-    const mg = add(new THREE.CylinderGeometry(0.24, 0.24, 3.4, 6), darkMat, turret);
-    mg.rotation.z = Math.PI / 2;
-    mg.position.set(-3, 8.5, 3.2);
-    const sight = add(new THREE.BoxGeometry(2.4, 1.8, 2.6), darkMat, turret);
-    sight.position.set(3.5, 7.4, -3.4);
-    const ant = add(new THREE.CylinderGeometry(0.12, 0.12, 18, 4), darkMat, turret);
-    ant.position.set(-8.5, 13, -4.8);
-    for (let i = 0; i < 4; i++) {
-      const sm = add(new THREE.CylinderGeometry(0.58, 0.58, 1.7, 6), darkMat, turret);
-      sm.rotation.z = Math.PI / 2;
-      sm.position.set(7.4, 3.9, -6.4 + i * 1.0);
-    }
-    const bustle = add(new THREE.BoxGeometry(5.2, 3.4, 11), darkMat, turret);
-    bustle.position.set(-12, 2.4, 0);
-
-    // Kanone im Zielwinkel (liegt in der Spielebene)
-    const gun = new THREE.Group();
-    gun.position.set(PIVOT_X, PIVOT_Y, 0);
-    group.add(gun);
-    const barrel = new THREE.Group();
-    gun.add(barrel);
-    const addB = (geo: THREE.BufferGeometry, mat: THREE.Material) => {
-      const m = new THREE.Mesh(geo, mat);
-      m.castShadow = true;
-      m.receiveShadow = true;
-      barrel.add(m);
-      return m;
-    };
-    const mant = addB(new THREE.CylinderGeometry(3.6, 3.6, 7.4, 14), bodyMat);
-    mant.rotation.x = Math.PI / 2;
-    mant.position.x = 1.5;
-    const tube = addB(new THREE.CylinderGeometry(1.3, 1.65, BARREL_LEN, 14), darkMat);
-    tube.rotation.z = -Math.PI / 2;
-    tube.position.x = BARREL_LEN / 2;
-    const sleeve = addB(new THREE.CylinderGeometry(2.05, 2.05, 13, 14), bodyMat);
-    sleeve.rotation.z = -Math.PI / 2;
-    sleeve.position.x = 14;
-    const evac = addB(new THREE.CylinderGeometry(1.9, 1.9, 3.2, 12), darkMat);
-    evac.rotation.z = -Math.PI / 2;
-    evac.position.x = 28;
-    const brake = addB(new THREE.CylinderGeometry(1.9, 1.9, 3, 12), trimMat);
-    brake.rotation.z = -Math.PI / 2;
-    brake.position.x = BARREL_LEN - 0.5;
-
-    const shield = new THREE.Mesh(
-      new THREE.SphereGeometry(30, 24, 16),
-      new THREE.MeshBasicMaterial({
-        color: new THREE.Color(0.25, 1.1, 1.7), transparent: true, opacity: 0.22, depthWrite: false,
-        blending: THREE.AdditiveBlending, toneMapped: false,
-      })
-    );
-    shield.position.y = 16;
-    shield.visible = false;
-    group.add(shield);
-
-    // Bodenschatten
     if (!this.shadowTex) {
       const c = document.createElement('canvas');
       c.width = c.height = 64;
@@ -1229,16 +1123,37 @@ export class DioramaRenderer {
       g.fillRect(0, 0, 64, 64);
       this.shadowTex = new THREE.CanvasTexture(c);
     }
-    const shadow = new THREE.Mesh(new THREE.PlaneGeometry(100, 52), new THREE.MeshBasicMaterial({ map: this.shadowTex, transparent: true, depthWrite: false, fog: false }));
+    const shadow = new THREE.Mesh(new THREE.PlaneGeometry(110, 54), new THREE.MeshBasicMaterial({ map: this.shadowTex, transparent: true, depthWrite: false, fog: false }));
     shadow.rotation.x = -Math.PI / 2;
     shadow.position.set(0, 0.8, 0);
     group.add(shadow);
 
+    // Rohr: Foto-Streifen, dreht um die Mantelwurzel
+    const gun = new THREE.Group();
+    gun.position.set(PIVOT_X, PIVOT_Y, 4);
+    group.add(gun);
+    const barrel = new THREE.Group();
+    gun.add(barrel);
+    const barrelMat = new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false, fog: false, color: '#dfe3ea', opacity: 0, side: THREE.DoubleSide });
+    const bplane = new THREE.Mesh(new THREE.PlaneGeometry(48, 4.42), barrelMat);
+    bplane.position.set(22.7, 0.1, 0);
+    bplane.renderOrder = 3;
+    barrel.add(bplane);
+
+    const shield = new THREE.Mesh(
+      new THREE.SphereGeometry(34, 24, 16),
+      new THREE.MeshBasicMaterial({
+        color: new THREE.Color(0.25, 1.1, 1.7), transparent: true, opacity: 0.22, depthWrite: false,
+        blending: THREE.AdditiveBlending, toneMapped: false,
+      })
+    );
+    shield.position.y = 18;
+    shield.visible = false;
+    group.add(shield);
+
     group.scale.setScalar(TANK_SCALE);
-    const dummyMat = new THREE.MeshBasicMaterial();
-    return { group, gun, barrel, shield, tilt: 0, recoil: 0, smokeT: 0, bodyMat, body, yaw: -0.4, baseColor: bodyMat.color.clone(), dead: false, wreckTilt: 0, sprite: body, spriteMat: dummyMat, colorHex, texReady: true, flip: 1 };
+    return { group, gun, barrel, shield, tilt: 0, recoil: 0, smokeT: 0, bodyMat: barrelMat, body: group, yaw: 0, baseColor: barrelMat.color.clone(), dead: false, wreckTilt: 0, sprite, spriteMat, colorHex, texReady: false, flip: 1 };
   }
-  private shadowTex: THREE.CanvasTexture | null = null;
 
   private syncTanks(sim: GameSimulation, dt: number): void {
     const ids = new Set(sim.tanks.map((t) => t.id));
@@ -1258,15 +1173,14 @@ export class DioramaRenderer {
       
 
       const t = sim.terrain;
+      this.ensureTankTex(vis);
       if (!tank.alive) {
         // brennendes Wrack bleibt liegen
         if (!vis.dead) {
           vis.dead = true;
           vis.wreckTilt = (Math.random() < 0.5 ? -1 : 1) * (0.18 + Math.random() * 0.3);
-          vis.bodyMat.color.set('#2b2724');
+          vis.bodyMat.color.set('#3b3531');
           vis.spriteMat.color.set('#3b3531');
-          vis.bodyMat.roughness = 0.95;
-          vis.bodyMat.metalness = 0.15;
           vis.shield.visible = false;
           this.burners.push({ x: tank.x, z: 0, t: 0, dur: 30, acc: 0, kind: 'flame', size: 9 }, { x: tank.x, z: 0, t: 0, dur: 30, acc: 0, kind: 'smoke', size: 12 });
         }
@@ -1282,9 +1196,7 @@ export class DioramaRenderer {
       if (vis.dead) {
         vis.dead = false;
         vis.bodyMat.color.copy(vis.baseColor);
-        vis.spriteMat.color.set('#ffffff');
-        vis.bodyMat.roughness = 0.46;
-        vis.bodyMat.metalness = 0.32;
+        vis.spriteMat.color.set('#dfe3ea');
       }
       vis.group.visible = true;
       const slope = Math.atan2(t.getHeight(tank.x + 9) - t.getHeight(tank.x - 9), 18);
@@ -1293,10 +1205,9 @@ export class DioramaRenderer {
       vis.group.rotation.z = vis.tilt;
       vis.gun.rotation.z = (tank.angle * Math.PI) / 180 - vis.tilt;
             vis.flip = tank.angle <= 90 ? 1 : -1;
-      const targetYaw = vis.flip > 0 ? -0.42 : Math.PI + 0.42;
-      vis.yaw += (targetYaw - vis.yaw) * Math.min(1, dt * 6);
-      vis.body.rotation.y = vis.yaw;
+      vis.sprite.scale.x = vis.flip;
       vis.gun.position.x = PIVOT_X * vis.flip;
+      vis.barrel.children[0].scale.y = vis.flip;
       vis.recoil = Math.max(0, vis.recoil - dt * 4);
       vis.barrel.position.x = -vis.recoil * 6;
 
@@ -1630,8 +1541,8 @@ export class DioramaRenderer {
     const ca = g.getAttribute('color') as THREE.BufferAttribute;
     const rad = (opts.aim.angle * Math.PI) / 180;
     const speed = opts.aim.power * POWER_TO_SPEED;
-    let x = me.x + (opts.aim.angle <= 90 ? 22 : -22) + Math.cos(rad) * 57;
-    let y = me.y + 38 + Math.sin(rad) * 57;
+    let x = me.x + (opts.aim.angle <= 90 ? 26 : -26) + Math.cos(rad) * 69;
+    let y = me.y + 38 + Math.sin(rad) * 69;
     let vx = Math.cos(rad) * speed;
     let vy = Math.sin(rad) * speed;
     const N = pa.count;
@@ -1690,7 +1601,7 @@ export class DioramaRenderer {
     const bob = Math.sin(this.elapsed * 0.35) * 1.8;
     const sway = Math.sin(this.elapsed * 0.21) * 14;
     this.camera.position.set(this.camX + sway - 80, 420 + bob - this.camZoom * 30, z);
-    this.camera.lookAt(this.camX * 0.92 + cx * 0.08 - 40, 85 + this.lookYOff - this.camZoom * 25, 0);
+    this.camera.lookAt(this.camX * 0.92 + cx * 0.08 - 40, 130 + this.lookYOff - this.camZoom * 25, 0);
     if (this.shakeIntensity > 0.2) {
       this.camera.position.x += (Math.random() - 0.5) * this.shakeIntensity;
       this.camera.position.y += (Math.random() - 0.5) * this.shakeIntensity;

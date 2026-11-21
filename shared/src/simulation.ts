@@ -129,8 +129,8 @@ export class GameSimulation {
       id: `p_${++this.projCounter}`,
       ownerId: tank.id,
       weaponId,
-      x: tank.x + (cmd.angle <= 90 ? 22 : -22) + Math.cos(rad) * 57,
-      y: tank.y + 38 + Math.sin(rad) * 57,
+      x: tank.x + (cmd.angle <= 90 ? 26 : -26) + Math.cos(rad) * 69,
+      y: tank.y + 38 + Math.sin(rad) * 69,
       vx: Math.cos(rad) * speed,
       vy: Math.sin(rad) * speed,
       hasSplit: false,
@@ -192,7 +192,7 @@ export class GameSimulation {
 
       const groundY = this.terrain.getHeight(p.x);
       const hitTank = this.tanks.find(
-        (t) => t.alive && Math.hypot(t.x - p.x, t.y + 19 - p.y) < 24
+        (t) => t.alive && Math.hypot(t.x - p.x, t.y + 25 - p.y) < 34
       );
 
       if (p.y <= groundY || hitTank) {
