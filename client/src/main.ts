@@ -730,7 +730,7 @@ function loop(now: number): void {
   requestAnimationFrame(loop);
 }
 
-if (import.meta.env.DEV) (window as unknown as Record<string, unknown>).__tw = { sim, get role() { return role; }, get session() { return session; } };
+if (import.meta.env.DEV) (window as unknown as Record<string, unknown>).__tw = { sim, diorama, get role() { return role; }, get session() { return session; } };
 
 startDemo();
 syncAimUi();

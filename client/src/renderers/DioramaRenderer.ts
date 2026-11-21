@@ -34,6 +34,9 @@ interface TankVisual {
   bodyMat: THREE.MeshStandardMaterial;
   body: THREE.Group;
   yaw: number;
+  baseColor: THREE.Color;
+  dead: boolean;
+  wreckTilt: number;
 }
 
 interface Fx {
@@ -78,8 +81,10 @@ const RAIN = 900;
 const MISTS = 14;
 const TANK_SCALE = 1.85;
 const MAX_DEBRIS = 260;
-const FIRE_POOL = 180;
-const SMOKE_POOL = 320;
+const FIRE_POOL = 420;
+const SMOKE_POOL = 760;
+const BLASTS = 14;
+const RUBBLE = 220;
 const MOTES = 140;
 
 /* ------------------------------------------------------------------ */
@@ -267,6 +272,18 @@ export class DioramaRenderer {
   private mists: THREE.Sprite[] = [];
   private skyMat!: THREE.ShaderMaterial;
   private texLoader = new THREE.TextureLoader();
+  private fireTex!: THREE.Texture;
+  private smokeTex!: THREE.CanvasTexture;
+  private blasts: Array<{ sprite: THREE.Sprite; active: boolean; life: number; maxLife: number; size: number; spin: number }> = [];
+  private burners: Array<{ x: number; z: number; t: number; dur: number; acc: number; kind: 'smoke' | 'flame'; size: number }> = [];
+  private scorch = new Float32Array(WORLD_WIDTH + 1);
+  private scorchDirty = new Set<number>();
+  private rubble: Array<{ x: number; z: number; s: number; r: number }> = [];
+  private rubbleMesh!: THREE.InstancedMesh;
+  private lastTerrain: unknown = null;
+  private lastRound = -1;
+  private terrainRef: GameSimulation['terrain'] | null = null;
+  private windDrift = 0;
 
   private tankVisuals = new Map<string, TankVisual>();
   private projMeshes = new Map<string, { mesh: THREE.Group; trail: number }>();
@@ -353,8 +370,32 @@ export class DioramaRenderer {
         c0: new THREE.Color(), c1: new THREE.Color(),
       };
     };
+    this.smokeTex = this.makeSmokeTexture();
+    this.fireTex = this.loadTex('fireball.jpg');
+    this.fireTex.wrapS = this.fireTex.wrapT = THREE.ClampToEdgeWrapping;
     for (let i = 0; i < FIRE_POOL; i++) this.fire.push(mk(true));
-    for (let i = 0; i < SMOKE_POOL; i++) this.smoke.push(mk(false));
+    for (let i = 0; i < SMOKE_POOL; i++) {
+      const f = mk(false);
+      (f.sprite.material as THREE.SpriteMaterial).map = this.smokeTex;
+      this.smoke.push(f);
+    }
+    for (let i = 0; i < BLASTS; i++) {
+      const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.fireTex, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, fog: false }));
+      sp.visible = false;
+      this.scene.add(sp);
+      this.blasts.push({ sprite: sp, active: false, life: 0, maxLife: 1, size: 1, spin: 0 });
+    }
+    const rockTex2 = this.loadTex('dirt.jpg');
+    this.rubbleMesh = new THREE.InstancedMesh(
+      new THREE.IcosahedronGeometry(1, 1),
+      new THREE.MeshStandardMaterial({ map: rockTex2, bumpMap: rockTex2, bumpScale: 2, color: '#6d655d', roughness: 0.95, flatShading: true }),
+      RUBBLE
+    );
+    this.rubbleMesh.count = 0;
+    this.rubbleMesh.castShadow = true;
+    this.rubbleMesh.receiveShadow = true;
+    this.rubbleMesh.frustumCulled = false;
+    this.scene.add(this.rubbleMesh);
     for (let i = 0; i < 16; i++) {
       const fx = mk(true);
       (fx.sprite.material as THREE.SpriteMaterial).map = this.ringTex;
@@ -420,6 +461,40 @@ export class DioramaRenderer {
 
   /* ----------------------------- Szene ----------------------------- */
 
+
+  private makeSmokeTexture(): THREE.CanvasTexture {
+    const c = document.createElement('canvas');
+    c.width = c.height = 128;
+    const g = c.getContext('2d')!;
+    for (let i = 0; i < 70; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const d = Math.pow(Math.random(), 0.7) * 38;
+      const x = 64 + Math.cos(a) * d, y = 64 + Math.sin(a) * d;
+      const r = 14 + Math.random() * 22;
+      const gr = g.createRadialGradient(x, y, 0, x, y, r);
+      const al = 0.1 + Math.random() * 0.16;
+      gr.addColorStop(0, `rgba(255,255,255,${al})`);
+      gr.addColorStop(1, 'rgba(255,255,255,0)');
+      g.fillStyle = gr;
+      g.fillRect(0, 0, 128, 128);
+    }
+    const edge = g.createRadialGradient(64, 64, 20, 64, 64, 64);
+    edge.addColorStop(0, 'rgba(0,0,0,0)');
+    edge.addColorStop(1, 'rgba(0,0,0,1)');
+    g.globalCompositeOperation = 'destination-out';
+    g.fillStyle = edge;
+    g.fillRect(0, 0, 128, 128);
+    const t = new THREE.CanvasTexture(c);
+    t.colorSpace = THREE.SRGBColorSpace;
+    return t;
+  }
+
+  private resetBattlefield(): void {
+    this.scorch.fill(0);
+    this.rubble.length = 0;
+    this.rubbleMesh.count = 0;
+    this.burners.length = 0;
+  }
 
   private loadTex(path: string, rx = 1, ry = 1, srgb = true): THREE.Texture {
     const t = this.texLoader.load(import.meta.env.BASE_URL + 'tex/' + path);
@@ -613,7 +688,8 @@ export class DioramaRenderer {
       const h = t.getHeight(f.x);
       m.position.set(f.x, h - 0.5, f.z);
       m.rotation.set(0, f.r, 0);
-      m.scale.set(f.s * 0.55, f.s * (h < 14 ? 0.01 : 1), f.s * 0.55);
+      const burnt = this.scorch[Math.max(0, Math.min(WORLD_WIDTH, Math.floor(f.x)))] > 0.4;
+      m.scale.set(f.s * 0.55, f.s * (h < 14 || burnt ? 0.01 : 1), f.s * 0.55);
       m.updateMatrix();
       this.tufts.setMatrixAt(i, m.matrix);
     });
@@ -627,11 +703,22 @@ export class DioramaRenderer {
       this.rocks.setMatrixAt(i, m.matrix);
     });
     this.rocks.instanceMatrix.needsUpdate = true;
+    this.rubble.forEach((r, i) => {
+      const h = t.getHeight(r.x);
+      m.position.set(r.x, h + r.s * 0.15, r.z);
+      m.rotation.set(r.r, r.r * 2.1, r.r * 0.6);
+      m.scale.set(r.s, r.s * 0.7, r.s * 0.9);
+      m.updateMatrix();
+      this.rubbleMesh.setMatrixAt(i, m.matrix);
+    });
+    this.rubbleMesh.count = this.rubble.length;
+    this.rubbleMesh.instanceMatrix.needsUpdate = true;
     this.treeSeed.forEach((tr, i) => {
       const h = t.getHeight(tr.x);
       m.position.set(tr.x, h - 1, tr.z);
       m.rotation.set(0, tr.x, 0);
-      m.scale.set(tr.s * 0.5, tr.s * 0.5, tr.s * 0.5);
+      const tb = this.scorch[Math.max(0, Math.min(WORLD_WIDTH, Math.floor(tr.x)))] > 0.35 ? 0.01 : 0.5;
+      m.scale.set(tr.s * tb, tr.s * tb, tr.s * tb);
       m.updateMatrix();
       this.trees.setMatrixAt(i, m.matrix);
     });
@@ -720,6 +807,8 @@ export class DioramaRenderer {
   /* ----------------------------- Terrain --------------------------- */
 
   private syncTerrain(sim: GameSimulation): void {
+    for (const c of this.scorchDirty) sim.terrain.dirtyChunks.add(c);
+    this.scorchDirty.clear();
     if (sim.terrain.dirtyChunks.size === 0) return;
     for (const chunkIdx of sim.terrain.dirtyChunks) {
       const old = this.chunkMeshes.get(chunkIdx);
@@ -771,7 +860,9 @@ export class DioramaRenderer {
     const mk = () => ({ pos: [] as number[], nor: [] as number[], col: [] as number[], uv: [] as number[] });
     const top = mk();
     const face = mk();
+    let burn = 1;
     const vert = (g: ReturnType<typeof mk>, x: number, y: number, z: number, n: [number, number, number], u: number, v: number, shade: number) => {
+      shade *= burn;
       g.pos.push(x, y, z);
       g.nor.push(n[0], n[1], n[2]);
       g.uv.push(u, v);
@@ -784,6 +875,8 @@ export class DioramaRenderer {
       const h1 = hf(x);
       const h2 = hf(nx);
       const j = 0.88 + hash(x * 0.5) * 0.24;
+      const sci = Math.max(0, Math.min(WORLD_WIDTH, Math.floor(x)));
+      burn = 1 - 0.74 * Math.min(1, this.scorch[sci] ?? 0);
       const slope = (a: number) => {
         const dh = (hf(a + 2) - hf(a - 2)) / 4;
         const l = Math.hypot(dh, 1);
@@ -966,7 +1059,7 @@ export class DioramaRenderer {
     group.add(shield);
 
     group.scale.setScalar(TANK_SCALE);
-    return { group, gun, barrel, shield, tilt: 0, recoil: 0, smokeT: 0, bodyMat, body, yaw: -0.3 };
+    return { group, gun, barrel, shield, tilt: 0, recoil: 0, smokeT: 0, bodyMat, body, yaw: -0.3, baseColor: bodyMat.color.clone(), dead: false, wreckTilt: 0 };
   }
 
   private syncTanks(sim: GameSimulation, dt: number): void {
@@ -986,10 +1079,33 @@ export class DioramaRenderer {
       }
       
 
-      vis.group.visible = tank.alive;
-      if (!tank.alive) continue;
-
       const t = sim.terrain;
+      if (!tank.alive) {
+        // brennendes Wrack bleibt liegen
+        if (!vis.dead) {
+          vis.dead = true;
+          vis.wreckTilt = (Math.random() < 0.5 ? -1 : 1) * (0.18 + Math.random() * 0.3);
+          vis.bodyMat.color.set('#2b2724');
+          vis.bodyMat.roughness = 0.95;
+          vis.bodyMat.metalness = 0.15;
+          vis.shield.visible = false;
+          this.burners.push({ x: tank.x, z: 0, t: 0, dur: 30, acc: 0, kind: 'flame', size: 9 }, { x: tank.x, z: 0, t: 0, dur: 30, acc: 0, kind: 'smoke', size: 12 });
+        }
+        vis.group.visible = true;
+        const gy = t.getHeight(tank.x);
+        const sl = Math.atan2(t.getHeight(tank.x + 9) - t.getHeight(tank.x - 9), 18);
+        vis.group.position.set(tank.x, gy - 1.5, 0);
+        vis.group.rotation.z += (sl + vis.wreckTilt - vis.group.rotation.z) * Math.min(1, dt * 3);
+        vis.gun.rotation.z += ((tank.angle > 90 ? 0.35 : 2.8) - vis.gun.rotation.z) * Math.min(1, dt * 1.5);
+        continue;
+      }
+      if (vis.dead) {
+        vis.dead = false;
+        vis.bodyMat.color.copy(vis.baseColor);
+        vis.bodyMat.roughness = 0.46;
+        vis.bodyMat.metalness = 0.32;
+      }
+      vis.group.visible = true;
       const slope = Math.atan2(t.getHeight(tank.x + 9) - t.getHeight(tank.x - 9), 18);
       vis.tilt += (slope - vis.tilt) * Math.min(1, dt * 8);
       vis.group.position.set(tank.x, tank.y, 0);
@@ -1121,70 +1237,143 @@ export class DioramaRenderer {
     this.emit(this.smoke, x, y, z, vx, vy, vz, life, s0, s1, color, null, a0, 0.9, 6);
   }
 
+  private emitSpark(x: number, y: number, z: number, vx: number, vy: number, vz: number, life: number, size: number): void {
+    this.emit(this.fire, x, y, z, vx, vy, vz, life, size, size * 0.3, '#fff0b0', '#ff4a12', 1, 0.25, -560);
+  }
+
   public spawnExplosion(ev: ExplosionEvent): void {
     const R = ev.radius;
     const big = R > 70;
-    this.shakeIntensity = Math.min(26, this.shakeIntensity + R * (big ? 0.38 : 0.24));
-    this.flashLevel = Math.max(this.flashLevel, Math.min(3.2, R / 28));
-    this.screenFlash = Math.max(this.screenFlash, big ? 1 : R / 90);
-    this.flashLight.position.set(ev.x, ev.y + 10, 40);
-    this.flashLight.color.set(ev.isDirt ? '#c9a070' : '#ff9a4a');
+    const dirt = ev.isDirt;
+    this.shakeIntensity = Math.min(34, this.shakeIntensity + R * (big ? 0.5 : 0.3));
+    this.flashLevel = Math.max(this.flashLevel, Math.min(4, R / 22));
+    this.screenFlash = Math.max(this.screenFlash, big ? 1 : R / 80);
+    this.flashLight.position.set(ev.x, ev.y + 14, 60);
+    this.flashLight.color.set(dirt ? '#c9a070' : '#ff8a3a');
 
-    // Schockwelle
-    this.emit(this.rings, ev.x, ev.y, 8, 0, 0, 0, big ? 0.9 : 0.5, R * 0.6, R * (big ? 5 : 3.2), ev.isDirt ? '#d8b88a' : '#ffd9a0', null, 0.8, 0, 0);
+    // Brandspuren, Geröll, Dauerfeuer
+    if (!dirt) {
+      const lo = Math.max(0, Math.floor(ev.x - R * 1.5));
+      const hi = Math.min(WORLD_WIDTH, Math.ceil(ev.x + R * 1.5));
+      for (let x = lo; x <= hi; x++) {
+        const f = 1 - Math.abs(x - ev.x) / (R * 1.5);
+        this.scorch[x] = Math.min(1, this.scorch[x] + f * (big ? 1.1 : 0.75));
+        this.scorchDirty.add(Math.floor(x / CHUNK_SIZE));
+      }
+      const nr = Math.floor(R * 0.55) + 4;
+      for (let i = 0; i < nr; i++) {
+        this.rubble.push({ x: ev.x + (Math.random() - 0.5) * R * 2.4, z: (Math.random() - 0.5) * 120, s: 1.8 + Math.pow(Math.random(), 2.2) * (R * 0.16 + 3), r: Math.random() * 6.28 });
+      }
+      while (this.rubble.length > RUBBLE) this.rubble.shift();
+      const nb = big ? 7 : Math.min(5, 1 + Math.floor(R / 22));
+      for (let i = 0; i < nb; i++) {
+        this.burners.push({ x: ev.x + (Math.random() - 0.5) * R * 1.6, z: (Math.random() - 0.5) * 60, t: 0, dur: 5 + Math.random() * (big ? 14 : 8), acc: 0, kind: 'flame', size: 5 + R * 0.12 });
+      }
+      this.burners.push({ x: ev.x, z: 0, t: 0, dur: big ? 14 : 4 + R / 14, acc: 0, kind: 'smoke', size: R * 0.5 });
+      if (this.burners.length > 60) this.burners.splice(0, this.burners.length - 60);
+    }
 
-    if (!ev.isDirt) {
-      this.emitFire(ev.x, ev.y, 10, 0, 0, 0, 0.22, R * 2.6, R * 3.4, '#ffffff', '#ffd27a', 1);
-      const n = Math.min(46, Math.floor(R * 0.7) + 8);
+    // Druckwelle
+    this.emit(this.rings, ev.x, ev.y, 8, 0, 0, 0, big ? 1 : 0.55, R * 0.6, R * (big ? 5.5 : 3.4), dirt ? '#d8b88a' : '#ffd9a0', null, 0.8, 0, 0);
+
+    if (!dirt) {
+      // Fotorealistischer Feuerball (aus dem Konzeptbild) + Hitzeschleier
+      const nBlast = big ? 3 : 1 + (R > 36 ? 1 : 0);
+      for (let i = 0; i < nBlast; i++) {
+        const b = this.blasts.find((q) => !q.active);
+        if (!b) break;
+        b.active = true;
+        b.sprite.visible = true;
+        b.sprite.position.set(ev.x + (i ? (Math.random() - 0.5) * R : 0), ev.y + 6 + (i ? Math.random() * R * 0.5 : 0), 22 + i * 5);
+        b.life = b.maxLife = 0.75 + Math.random() * 0.35 + (big ? 0.5 : 0);
+        b.size = R * (i ? 3.0 : 4.2) * (big ? 1.2 : 1);
+        b.spin = (Math.random() - 0.5) * 0.9;
+        b.sprite.material.rotation = Math.random() * 6.28;
+      }
+      this.emitFire(ev.x, ev.y + 4, 14, 0, 0, 0, 0.3, R * 3.0, R * 4.2, '#ffd9a0', '#ff9a40', 0.55);
+      const n = Math.min(60, Math.floor(R * 0.9) + 10);
       for (let i = 0; i < n; i++) {
         const a = Math.random() * Math.PI * 2;
-        const sp = (0.2 + Math.random() * 0.9) * R * 2.8;
+        const sp = (0.2 + Math.random() * 0.9) * R * 2.6;
         this.emitFire(
-          ev.x + Math.cos(a) * R * 0.2, ev.y + Math.sin(a) * R * 0.2, (Math.random() - 0.5) * 30,
-          Math.cos(a) * sp, Math.sin(a) * sp * 0.8 + 40, (Math.random() - 0.5) * sp * 0.4,
-          0.45 + Math.random() * 0.6, R * (0.5 + Math.random() * 0.5), R * 0.15, '#ffe9a0', Math.random() < 0.5 ? '#ff4a14' : '#c8260c', 0.95
+          ev.x + Math.cos(a) * R * 0.2, ev.y + Math.sin(a) * R * 0.2, (Math.random() - 0.5) * 40,
+          Math.cos(a) * sp, Math.sin(a) * sp * 0.8 + 50, (Math.random() - 0.5) * sp * 0.4,
+          0.5 + Math.random() * 0.8, R * (0.45 + Math.random() * 0.5), R * 0.12, '#ffe9a0', Math.random() < 0.5 ? '#ff4a14' : '#b8200a', 0.9
         );
       }
-    }
-    const sn = Math.min(40, Math.floor(R * 0.55) + 6);
-    for (let i = 0; i < sn; i++) {
-      const a = Math.random() * Math.PI * 2;
-      const sp = (0.1 + Math.random() * 0.6) * R * 1.8;
-      this.emitSmoke(
-        ev.x + Math.cos(a) * R * 0.3, ev.y + Math.sin(a) * R * 0.3, (Math.random() - 0.5) * 30,
-        Math.cos(a) * sp, Math.abs(Math.sin(a)) * sp * 0.6 + 25, (Math.random() - 0.5) * 20,
-        1.4 + Math.random() * (big ? 3.4 : 1.8), R * 0.5, R * (big ? 1.7 : 1.2),
-        ev.isDirt ? '#8a6a48' : Math.random() < 0.5 ? '#3a3a3f' : '#55524f', ev.isDirt ? 0.8 : 0.72
-      );
-    }
-    if (big) {
-      for (let i = 0; i < 18; i++) {
-        this.emitFire(ev.x + (Math.random() - 0.5) * 20, ev.y + i * 6, 0, (Math.random() - 0.5) * 20, 80 + Math.random() * 80, 0, 1.2 + Math.random() * 0.8, R * 0.55, R * 1.1, '#ffd27a', '#ff4a14', 0.85);
+      // Funkenregen
+      const ns = Math.min(110, Math.floor(R * 1.6) + 20);
+      for (let i = 0; i < ns; i++) {
+        const a = Math.random() * Math.PI;
+        const sp = (0.3 + Math.random() * 1.1) * R * 4.6;
+        this.emitSpark(ev.x, ev.y + 4, (Math.random() - 0.5) * 30, Math.cos(a) * sp * (Math.random() < 0.5 ? 1 : -1), Math.sin(a) * sp + 80, (Math.random() - 0.5) * sp * 0.4, 0.6 + Math.random() * 1.2, 1.4 + Math.random() * 2.2);
       }
     }
 
-    const dn = Math.min(48, Math.floor(R * 0.9));
+    // dunkler Rauch (schwere, langsam aufsteigende Wolken)
+    const sn = Math.min(70, Math.floor(R * 0.9) + 8);
+    for (let i = 0; i < sn; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const sp = (0.1 + Math.random() * 0.6) * R * 1.6;
+      this.emitSmoke(
+        ev.x + Math.cos(a) * R * 0.3, ev.y + Math.sin(a) * R * 0.3, (Math.random() - 0.5) * 50,
+        Math.cos(a) * sp, Math.abs(Math.sin(a)) * sp * 0.7 + 30, (Math.random() - 0.5) * 24,
+        2.2 + Math.random() * (big ? 6 : 3.6), R * 0.7, R * (big ? 2.6 : 1.9),
+        dirt ? '#7a6248' : Math.random() < 0.6 ? '#232326' : '#45423f', dirt ? 0.8 : 0.85
+      );
+    }
+
+    // Trümmer: große Felsbrocken und Erdklumpen, anfangs glühend
+    const dn = Math.min(90, Math.floor(R * 1.3));
     let k = 0;
-    for (const d of this.debris) {
+    for (let i = 0; i < MAX_DEBRIS && k < dn; i++) {
+      const d = this.debris[i];
       if (d.active) continue;
       d.active = true;
-      d.x = ev.x; d.y = ev.y; d.z = (Math.random() - 0.5) * 30;
+      d.x = ev.x; d.y = ev.y; d.z = (Math.random() - 0.5) * 40;
       const a = Math.random() * Math.PI;
-      const sp = (0.4 + Math.random() * 0.8) * R * 4.2;
+      const sp = (0.35 + Math.random() * 0.9) * R * 4.6;
       d.vx = Math.cos(a) * sp * (Math.random() < 0.5 ? 1 : -1);
-      d.vy = Math.sin(a) * sp + 60;
-      d.vz = (Math.random() - 0.5) * sp * 0.6;
-      d.life = 0.9 + Math.random() * 0.9;
-      d.s = (ev.isDirt ? 1.6 : 1.2) + Math.random() * 2.6;
-      d.rx = Math.random() * 10; d.ry = Math.random() * 10;
-      d.color.set(Math.random() < 0.55 ? '#7a5233' : Math.random() < 0.5 ? '#4a8a27' : '#3a3836');
-      this.debrisMesh.setColorAt(this.debris.indexOf(d), d.color);
-      if (++k >= dn) break;
+      d.vy = Math.sin(a) * sp + 90;
+      d.vz = (Math.random() - 0.5) * sp * 0.7;
+      d.life = 1.2 + Math.random() * 1.4;
+      d.s = (dirt ? 1.8 : 1.4) + Math.pow(Math.random(), 2) * (R * 0.18 + 2);
+      d.rx = Math.random() * 12; d.ry = Math.random() * 12;
+      d.color.set(Math.random() < 0.5 ? '#6e5338' : Math.random() < 0.5 ? '#4a4a4a' : '#7b6a55');
+      this.debrisMesh.setColorAt(i, d.color);
+      k++;
     }
     if (this.debrisMesh.instanceColor) this.debrisMesh.instanceColor.needsUpdate = true;
   }
 
   private updateParticles(dt: number): void {
+    for (const b of this.blasts) {
+      if (!b.active) continue;
+      b.life -= dt;
+      if (b.life <= 0) { b.active = false; b.sprite.visible = false; continue; }
+      const t = 1 - b.life / b.maxLife;
+      const sz = b.size * (0.35 + 0.75 * Math.sqrt(t));
+      b.sprite.scale.set(sz, sz * 0.86, 1);
+      b.sprite.material.rotation += b.spin * dt;
+      b.sprite.material.opacity = Math.min(1, (1 - t) * 1.6) * Math.min(1, t * 14);
+    }
+    const th = this.terrainRef;
+    for (let i = this.burners.length - 1; i >= 0; i--) {
+      const br = this.burners[i];
+      br.t += dt;
+      if (br.t > br.dur) { this.burners.splice(i, 1); continue; }
+      const fade = 1 - br.t / br.dur;
+      const gy = th ? th.getHeight(br.x) : 0;
+      br.acc += dt * (br.kind === 'flame' ? 16 : 7) * (0.35 + fade);
+      while (br.acc >= 1) {
+        br.acc -= 1;
+        if (br.kind === 'flame') {
+          this.emitFire(br.x + (Math.random() - 0.5) * 10, gy + 2, br.z + (Math.random() - 0.5) * 10, (Math.random() - 0.5) * 8 + this.windDrift, 26 + Math.random() * 30, 0, 0.4 + Math.random() * 0.4, br.size * (0.8 + Math.random() * 0.8) * (0.5 + fade * 0.5), br.size * 0.2, '#ffcf60', '#ff3a0c', 0.85);
+        } else {
+          this.emitSmoke(br.x + (Math.random() - 0.5) * 12, gy + 8, br.z + (Math.random() - 0.5) * 12, (Math.random() - 0.5) * 8 + this.windDrift, 34 + Math.random() * 20, 0, 2.6 + Math.random() * 2.2, br.size * 0.7, br.size * 2.6, '#2a2a2d', 0.55 * (0.4 + fade * 0.6));
+        }
+      }
+    }
     const upd = (pool: Fx[], additive: boolean) => {
       for (const p of pool) {
         if (!p.active) continue;
@@ -1204,7 +1393,7 @@ export class DioramaRenderer {
         const m = s.material as THREE.SpriteMaterial;
         m.color.copy(p.c0).lerp(p.c1, Math.min(1, t * 1.6));
         if (additive) {
-          m.color.multiplyScalar(1.5 * (1 - t));
+          m.color.multiplyScalar(1.25 * (1 - t));
           m.opacity = p.a0;
         } else {
           m.opacity = p.a0 * (1 - t) * Math.min(1, t * 10);
@@ -1234,6 +1423,8 @@ export class DioramaRenderer {
       this.dummy.scale.set(s, s, s);
       this.dummy.updateMatrix();
       this.debrisMesh.setMatrixAt(i, this.dummy.matrix);
+      // glühend -> erkaltet
+      if (d.life > 0.7) { /* frisch */ }
     }
     this.debrisMesh.instanceMatrix.needsUpdate = true;
 
@@ -1281,6 +1472,14 @@ export class DioramaRenderer {
   /* ----------------------------- Render ---------------------------- */
 
   public render(sim: GameSimulation, dt: number, opts: RenderOptions): void {
+    if (this.lastTerrain !== sim.terrain || this.lastRound !== sim.round) {
+      this.lastTerrain = sim.terrain;
+      this.lastRound = sim.round;
+      this.resetBattlefield();
+      sim.terrain.markAllDirty();
+    }
+    this.terrainRef = sim.terrain;
+    this.windDrift = sim.wind * 0.5;
     this.syncTerrain(sim);
     this.syncTanks(sim, dt);
     this.syncProjectiles(sim, dt);
