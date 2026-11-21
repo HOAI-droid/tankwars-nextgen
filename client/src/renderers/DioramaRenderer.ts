@@ -976,8 +976,8 @@ export class DioramaRenderer {
     this.composer.setSize(w, h);
     this.bloomPass.setSize(w, h);
     this.camera.aspect = w / h;
-    this.baseZ = 800 * Math.max(1, 1.45 / this.camera.aspect) * (h < 520 ? 1.14 : 1);
-    this.lookYOff = h < 520 ? 48 : 0;
+    this.baseZ = 800 * Math.max(1, 1.45 / this.camera.aspect) * (h < 520 ? 1.0 : 1);
+    this.lookYOff = h < 520 ? 30 : 0;
     this.camera.updateProjectionMatrix();
   }
 

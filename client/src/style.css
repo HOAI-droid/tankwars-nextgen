@@ -429,3 +429,38 @@ input[type='range']::-moz-range-thumb { width: 14px; height: 20px; background: v
   #roster { min-width: 130px; gap: 3px; }
   .r-row .nm { font-size: 12px; }
 }
+
+/* ---------- Touch kompakt: ein schmaler Streifen, Spielfeld bleibt sichtbar ---------- */
+@media (pointer: coarse) {
+  #deck {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 0.8fr) auto !important;
+    grid-template-areas: 'ang pow wep fire' !important;
+    grid-template-rows: auto !important;
+    gap: 8px 12px !important;
+    padding: 6px 10px !important;
+    align-items: center;
+    border-radius: 10px;
+  }
+  .gauge-body { flex-direction: column !important; align-items: stretch !important; gap: 0 !important; }
+  .gauge-label { flex-direction: row !important; min-width: 0 !important; align-items: baseline; justify-content: space-between; gap: 8px; font-size: 10px !important; letter-spacing: 2px; }
+  .touch-val { font-size: 17px !important; }
+  input[type='range'] { height: 38px !important; }
+  input[type='range']::-webkit-slider-runnable-track { height: 10px !important; }
+  input[type='range']::-webkit-slider-thumb { width: 36px !important; height: 36px !important; margin-top: -13px !important; }
+  #weapons { max-height: 52px; }
+  .wcard { min-width: 74px !important; padding: 4px 8px !important; }
+  .wcard i { width: 12px; height: 12px; }
+  .wcard b { font-size: 10px; }
+  .fire { width: 96px !important; min-height: 50px !important; }
+  .fire span { font-size: 20px !important; }
+  .fire small { display: none; }
+  #roster { min-width: 0 !important; width: 112px; gap: 2px !important; }
+  .r-row { padding: 2px 8px 2px 0 !important; grid-template-columns: 6px 1fr auto; gap: 6px; }
+  .r-row .nm { font-size: 10px !important; }
+  .r-row .hpbar { height: 3px; margin-top: 1px; }
+  .r-row .sc { font-size: 10px; }
+  #round-label { font-size: 18px !important; }
+  #wind-box { padding: 2px 10px !important; font-size: 11px !important; }
+  #turn-info { font-size: 11px !important; min-height: 0; }
+  .sys { height: 32px !important; min-width: 36px !important; font-size: 12px !important; }
+}
