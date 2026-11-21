@@ -582,7 +582,7 @@ function updateWorldUi(): void {
   for (const t of sim.tanks) {
     const prev = prevHp.get(t.id);
     if (prev !== undefined && t.hp < prev - 0.5 && !isRetro) {
-      const p = diorama.project(t.x, t.y + 98);
+      const p = diorama.project(t.x, t.y + 108);
       spawnFloater(`-${Math.round(prev - t.hp)}`, p.x, p.y);
     }
     prevHp.set(t.id, t.hp);
@@ -602,7 +602,7 @@ function updateWorldUi(): void {
     el.className = `plate${t.id === myTankId ? ' me' : ''}${t.ready ? ' ready' : ''}`;
     el.style.display = t.alive ? '' : 'none';
     if (!t.alive || isRetro) continue;
-    const p = diorama.project(t.x, t.y + 82);
+    const p = diorama.project(t.x, t.y + 90);
     el.style.left = `${p.x}px`;
     el.style.top = `${p.y}px`;
     const nm = el.firstElementChild as HTMLElement;

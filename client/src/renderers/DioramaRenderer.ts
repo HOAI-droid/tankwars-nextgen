@@ -4,6 +4,7 @@ import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
+import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
 import {
   CHUNK_SIZE,
   ExplosionEvent,
@@ -30,14 +31,16 @@ interface TankVisual {
   tilt: number;
   recoil: number;
   smokeT: number;
-  bodyMat: THREE.MeshBasicMaterial;
+  bodyMat: THREE.MeshStandardMaterial;
   body: THREE.Group;
   yaw: number;
   baseColor: THREE.Color;
   dead: boolean;
   wreckTilt: number;
   sprite: THREE.Object3D;
-  spriteMat: THREE.MeshBasicMaterial;
+  spriteMat: THREE.MeshStandardMaterial;
+  variant: number;
+  meshed: boolean;
   colorHex: string;
   texReady: boolean;
   flip: number;
@@ -86,11 +89,12 @@ const ROCKS = 110;
 const TREES = 150;
 const RAIN = 900;
 const MISTS = 7;
-const TANK_SCALE = 1.5;
-const PIVOT_X = 17.6;
-const PIVOT_Y = 25.3;
-const BARREL_LEN = 46.2;
-const HULL_W = 79;
+const TANK_SCALE = 1;
+const MS = 72; // Modell-Skalierung
+const YAW = 0.5;
+const PIVOT_X = 0.54 * MS * Math.cos(YAW);
+const PIVOT_Y = 0.413 * MS;
+const BARREL_LEN = 0.42 * MS;
 const MAX_DEBRIS = 260;
 const FIRE_POOL = 420;
 const SMOKE_POOL = 760;
@@ -617,10 +621,10 @@ export class DioramaRenderer {
            float mi = n21(xz * 0.031 + 7.0);
            vec3 grass = mix(st(tA, xz, 300.0), st(tB, xz, 260.0), smoothstep(0.35, 0.65, lo * 0.6 + mi * 0.4));
            vec3 moss = tri3(tM, vWPos, w, 280.0);
-           vec3 cliff = tri3(tK, vWPos, w, 340.0);
+           vec3 cliff = tri3(tK, vWPos, w, 340.0) * vec3(0.6, 0.56, 0.5);
            vec3 mud = st(tD, xz, 280.0);
            vec3 crater = st(tC, xz, 240.0);
-           float rock = smoothstep(0.2, 0.46, slope + (nz - 0.5) * 0.25);
+           float rock = smoothstep(0.34, 0.62, slope + (nz - 0.5) * 0.22);
            vec3 flat1 = mix(grass, moss, smoothstep(0.5, 0.85, mi) * 0.85);
            vec3 steep = mix(cliff, moss, smoothstep(0.55, 0.9, nz) * 0.35 * (1.0 - smoothstep(0.55, 0.8, slope)));
            vec3 col = mix(flat1, steep, rock);
@@ -629,7 +633,7 @@ export class DioramaRenderer {
            col = mix(col, mud, clamp(wet * 0.9 + patch1 * 0.75, 0.0, 1.0));
            float sc = clamp((1.0 - vColor.r) / 0.78, 0.0, 1.0);
            col = mix(col, crater * 0.9, smoothstep(0.1, 0.5, sc));
-           diffuseColor.rgb *= col * 0.92;`
+           diffuseColor.rgb *= col * 0.8;`
         );
     };
     return mat;
@@ -1032,46 +1036,79 @@ export class DioramaRenderer {
   }
 
   private tankImgRequested = false;
-  private tankImgs: { hull: HTMLImageElement | null; barrel: HTMLImageElement | null } = { hull: null, barrel: null };
+  private models: Array<{ body: THREE.BufferGeometry; barrel: THREE.BufferGeometry; img: HTMLImageElement | null } | null> = [null, null];
   private tankTex = new Map<string, THREE.CanvasTexture>();
   private shadowTex: THREE.CanvasTexture | null = null;
 
-  private loadTankImages(): void {
-    const base = import.meta.env.BASE_URL + 'tex/';
-    for (const k of ['hull', 'barrel'] as const) {
-      const img = new Image();
-      img.onload = () => (this.tankImgs[k] = img);
-      img.src = base + (k === 'hull' ? 'tank_hull.png' : 'tank_barrel.png');
-    }
+  /** Panzer-OBJ laden und das Rohr als eigenes Teil abtrennen (dreht um die Mantelwurzel). */
+  private loadTankModels(): void {
+    const base = import.meta.env.BASE_URL + 'models/';
+    ['tankA', 'tankB'].forEach((name, idx) => {
+      new OBJLoader().load(base + name + '.obj', (obj) => {
+        let mesh: THREE.Mesh | null = null;
+        obj.traverse((o) => { if ((o as THREE.Mesh).isMesh && !mesh) mesh = o as THREE.Mesh; });
+        if (!mesh) return;
+        const g = (mesh as THREE.Mesh).geometry as THREE.BufferGeometry;
+        const pos = g.getAttribute('position'), uv = g.getAttribute('uv'), nor = g.getAttribute('normal');
+        const bp: number[] = [], bu: number[] = [], bn: number[] = [];
+        const rp: number[] = [], ru: number[] = [], rn: number[] = [];
+        const isB = (i: number) => pos.getX(i) < -0.56 && Math.abs(pos.getZ(i)) < 0.065 && pos.getY(i) > -0.03;
+        for (let i = 0; i < pos.count; i += 3) {
+          const barrel = isB(i) && isB(i + 1) && isB(i + 2);
+          const P = barrel ? rp : bp, U = barrel ? ru : bu, N = barrel ? rn : bn;
+          for (let k = 0; k < 3; k++) {
+            P.push(pos.getX(i + k), pos.getY(i + k), pos.getZ(i + k));
+            U.push(uv.getX(i + k), uv.getY(i + k));
+            N.push(nor ? nor.getX(i + k) : 0, nor ? nor.getY(i + k) : 1, nor ? nor.getZ(i + k) : 0);
+          }
+        }
+        const mk = (P: number[], U: number[], N: number[]) => {
+          const geo = new THREE.BufferGeometry();
+          geo.setAttribute('position', new THREE.Float32BufferAttribute(P, 3));
+          geo.setAttribute('uv', new THREE.Float32BufferAttribute(U, 2));
+          geo.setAttribute('normal', new THREE.Float32BufferAttribute(N, 3));
+          return geo;
+        };
+        const body = mk(bp, bu, bn);
+        body.translate(0, 0.388, 0);
+        const barrel = mk(rp, ru, rn);
+        barrel.translate(0.54, -0.025, 0); // Drehpunkt = Mantelwurzel
+        barrel.rotateY(Math.PI); // Rohr zeigt nach +x
+        const img = new Image();
+        img.onload = () => { this.models[idx]!.img = img; };
+        img.src = base + name + '.jpg';
+        this.models[idx] = { body, barrel, img: null };
+      });
+    });
   }
 
-  /** Foto-Panzer pro Team umfärben (rote Lackfläche -> Teamfarbe). */
-  private teamTexture(colorHex: string, which: 'hull' | 'barrel'): THREE.CanvasTexture | null {
-    const img = this.tankImgs[which];
-    if (!img) return null;
-    const key = colorHex + which;
+  /** Lack pro Team umfärben (rote Flächen -> Teamfarbe). */
+  private teamTexture(colorHex: string, variant: number): THREE.CanvasTexture | null {
+    const m = this.models[variant];
+    if (!m || !m.img) return null;
+    const key = colorHex + variant;
     const cached = this.tankTex.get(key);
     if (cached) return cached;
+    const img = m.img;
     const c = document.createElement('canvas');
     c.width = img.width;
     c.height = img.height;
     const g = c.getContext('2d', { willReadFrequently: true })!;
     g.drawImage(img, 0, 0);
-    const data = g.getImageData(0, 0, c.width, c.height);
-    const d = data.data;
-    const hsl = { h: 0, s: 0, l: 0 };
-    new THREE.Color(colorHex).getHSL(hsl);
-    const desat = hsl.s < 0.2;
-    const q = new THREE.Color();
-    const isRed = colorHex.toLowerCase() === '#ff4d4d';
-    if (!isRed) {
+    if (colorHex.toLowerCase() !== '#ff4d4d') {
+      const data = g.getImageData(0, 0, c.width, c.height);
+      const d = data.data;
+      const hsl = { h: 0, s: 0, l: 0 };
+      new THREE.Color(colorHex).getHSL(hsl);
+      const desat = hsl.s < 0.2;
+      const q = new THREE.Color();
       for (let i = 0; i < d.length; i += 4) {
         const r = d[i] / 255, gg = d[i + 1] / 255, b = d[i + 2] / 255;
         const mx = Math.max(r, gg, b), mn = Math.min(r, gg, b);
         const sat = mx === 0 ? 0 : (mx - mn) / mx;
-        if (sat < 0.32 || r < gg * 1.25 || r < b * 1.2) continue;
-        q.setHSL(hsl.h, desat ? 0.05 : Math.min(1, hsl.s * 0.72), Math.min(0.9, mx * (desat ? 1.2 : 0.78)));
-        const k = Math.min(1, (sat - 0.32) * 4);
+        if (sat < 0.3 || r < gg * 1.25 || r < b * 1.2) continue;
+        q.setHSL(hsl.h, desat ? 0.05 : Math.min(1, hsl.s * 0.7), Math.min(0.8, mx * (desat ? 0.95 : 0.6)));
+        const k = Math.min(1, (sat - 0.3) * 4);
         d[i] = (d[i] * (1 - k) + q.r * 255 * k) | 0;
         d[i + 1] = (d[i + 1] * (1 - k) + q.g * 255 * k) | 0;
         d[i + 2] = (d[i + 2] * (1 - k) + q.b * 255 * k) | 0;
@@ -1086,31 +1123,41 @@ export class DioramaRenderer {
   }
 
   private ensureTankTex(vis: TankVisual): void {
-    if (vis.texReady) return;
-    const th = this.teamTexture(vis.colorHex, 'hull');
-    const tb = this.teamTexture(vis.colorHex, 'barrel');
-    if (!th || !tb) return;
-    vis.spriteMat.map = th;
-    vis.spriteMat.opacity = 1;
+    if (vis.meshed) return;
+    const m = this.models[vis.variant];
+    const tex = this.teamTexture(vis.colorHex, vis.variant);
+    if (!m || !tex) return;
+    vis.spriteMat.map = tex;
     vis.spriteMat.needsUpdate = true;
-    vis.bodyMat.map = tb;
-    vis.bodyMat.opacity = 1;
+    vis.bodyMat.map = tex;
     vis.bodyMat.needsUpdate = true;
+    const hull = new THREE.Mesh(m.body, vis.spriteMat);
+    hull.scale.setScalar(MS);
+    hull.castShadow = true;
+    hull.receiveShadow = true;
+    vis.body.add(hull);
+    const br = new THREE.Mesh(m.barrel, vis.bodyMat);
+    br.scale.setScalar(MS);
+    br.castShadow = true;
+    vis.barrel.add(br);
+    vis.meshed = true;
     vis.texReady = true;
   }
 
-  private createTankVisual(colorHex: string): TankVisual {
+  private createTankVisual(colorHex: string, id = ''): TankVisual {
     if (!this.tankImgRequested) {
       this.tankImgRequested = true;
-      this.loadTankImages();
+      this.loadTankModels();
     }
+    let h = 0;
+    for (let i = 0; i < id.length; i++) h += id.charCodeAt(i);
+    const variant = h % 2;
     const group = new THREE.Group();
-    const H = HULL_W * (387 / 786);
-    const spriteMat = new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false, fog: false, color: '#dfe3ea', opacity: 0, side: THREE.DoubleSide });
-    const sprite = new THREE.Mesh(new THREE.PlaneGeometry(HULL_W, H), spriteMat);
-    sprite.position.set(0, H / 2 - 2, 3);
-    sprite.renderOrder = 2;
-    group.add(sprite);
+    const body = new THREE.Group();
+    group.add(body);
+    const mkMat = () => new THREE.MeshStandardMaterial({ color: '#d9d9d9', roughness: 0.6, metalness: 0.25, envMapIntensity: 0.8 });
+    const spriteMat = mkMat();
+    const barrelMat = mkMat();
 
     if (!this.shadowTex) {
       const c = document.createElement('canvas');
@@ -1123,36 +1170,29 @@ export class DioramaRenderer {
       g.fillRect(0, 0, 64, 64);
       this.shadowTex = new THREE.CanvasTexture(c);
     }
-    const shadow = new THREE.Mesh(new THREE.PlaneGeometry(110, 54), new THREE.MeshBasicMaterial({ map: this.shadowTex, transparent: true, depthWrite: false, fog: false }));
+    const shadow = new THREE.Mesh(new THREE.PlaneGeometry(120, 60), new THREE.MeshBasicMaterial({ map: this.shadowTex, transparent: true, depthWrite: false, fog: false }));
     shadow.rotation.x = -Math.PI / 2;
     shadow.position.set(0, 0.8, 0);
     group.add(shadow);
 
-    // Rohr: Foto-Streifen, dreht um die Mantelwurzel
     const gun = new THREE.Group();
-    gun.position.set(PIVOT_X, PIVOT_Y, 4);
     group.add(gun);
     const barrel = new THREE.Group();
     gun.add(barrel);
-    const barrelMat = new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false, fog: false, color: '#dfe3ea', opacity: 0, side: THREE.DoubleSide });
-    const bplane = new THREE.Mesh(new THREE.PlaneGeometry(48, 4.42), barrelMat);
-    bplane.position.set(22.7, 0.1, 0);
-    bplane.renderOrder = 3;
-    barrel.add(bplane);
 
     const shield = new THREE.Mesh(
-      new THREE.SphereGeometry(34, 24, 16),
+      new THREE.SphereGeometry(40, 24, 16),
       new THREE.MeshBasicMaterial({
         color: new THREE.Color(0.25, 1.1, 1.7), transparent: true, opacity: 0.22, depthWrite: false,
         blending: THREE.AdditiveBlending, toneMapped: false,
       })
     );
-    shield.position.y = 18;
+    shield.position.y = 20;
     shield.visible = false;
     group.add(shield);
 
     group.scale.setScalar(TANK_SCALE);
-    return { group, gun, barrel, shield, tilt: 0, recoil: 0, smokeT: 0, bodyMat: barrelMat, body: group, yaw: 0, baseColor: barrelMat.color.clone(), dead: false, wreckTilt: 0, sprite, spriteMat, colorHex, texReady: false, flip: 1 };
+    return { group, gun, barrel, shield, tilt: 0, recoil: 0, smokeT: 0, bodyMat: barrelMat, body, yaw: 0, baseColor: barrelMat.color.clone(), dead: false, wreckTilt: 0, sprite: body, spriteMat, colorHex, texReady: false, flip: 1, variant, meshed: false };
   }
 
   private syncTanks(sim: GameSimulation, dt: number): void {
@@ -1166,7 +1206,7 @@ export class DioramaRenderer {
     for (const tank of sim.tanks) {
       let vis = this.tankVisuals.get(tank.id);
       if (!vis) {
-        vis = this.createTankVisual(tank.color);
+        vis = this.createTankVisual(tank.color, tank.id);
         this.scene.add(vis.group);
         this.tankVisuals.set(tank.id, vis);
       }
@@ -1179,13 +1219,12 @@ export class DioramaRenderer {
         if (!vis.dead) {
           vis.dead = true;
           vis.wreckTilt = (Math.random() < 0.5 ? -1 : 1) * (0.18 + Math.random() * 0.3);
-          vis.bodyMat.color.set('#3b3531');
-          vis.spriteMat.color.set('#3b3531');
+          vis.bodyMat.color.set('#2a2623');
+          vis.spriteMat.color.set('#2a2623');
           vis.shield.visible = false;
           this.burners.push({ x: tank.x, z: 0, t: 0, dur: 30, acc: 0, kind: 'flame', size: 9 }, { x: tank.x, z: 0, t: 0, dur: 30, acc: 0, kind: 'smoke', size: 12 });
         }
         vis.group.visible = true;
-                vis.gun.position.x = PIVOT_X * vis.flip;
         const gy = t.getHeight(tank.x);
         const sl = Math.atan2(t.getHeight(tank.x + 9) - t.getHeight(tank.x - 9), 18);
         vis.group.position.set(tank.x, gy - 1.5, 0);
@@ -1196,7 +1235,7 @@ export class DioramaRenderer {
       if (vis.dead) {
         vis.dead = false;
         vis.bodyMat.color.copy(vis.baseColor);
-        vis.spriteMat.color.set('#dfe3ea');
+        vis.spriteMat.color.set('#d9d9d9');
       }
       vis.group.visible = true;
       const slope = Math.atan2(t.getHeight(tank.x + 9) - t.getHeight(tank.x - 9), 18);
@@ -1204,12 +1243,13 @@ export class DioramaRenderer {
       vis.group.position.set(tank.x, tank.y, 0);
       vis.group.rotation.z = vis.tilt;
       vis.gun.rotation.z = (tank.angle * Math.PI) / 180 - vis.tilt;
-            vis.flip = tank.angle <= 90 ? 1 : -1;
-      vis.sprite.scale.x = vis.flip;
-      vis.gun.position.x = PIVOT_X * vis.flip;
-      vis.barrel.children[0].scale.y = vis.flip;
+      vis.flip = tank.angle <= 90 ? 1 : -1;
+      const aY = vis.flip > 0 ? Math.PI - YAW : YAW;
+      vis.yaw += (aY - vis.yaw) * Math.min(1, dt * 7);
+      vis.body.rotation.y = vis.yaw;
+      vis.gun.position.set(-0.54 * MS * Math.cos(vis.yaw), PIVOT_Y, 0.54 * MS * Math.sin(vis.yaw));
       vis.recoil = Math.max(0, vis.recoil - dt * 4);
-      vis.barrel.position.x = -vis.recoil * 6;
+      vis.barrel.position.x = -vis.recoil * 4;
 
       vis.shield.visible = tank.shield > 0;
       if (vis.shield.visible) {
@@ -1232,8 +1272,8 @@ export class DioramaRenderer {
       if (!tank || !vis) continue;
       vis.recoil = 1;
       const a = (tank.angle * Math.PI) / 180;
-      const tx = tank.x + (tank.angle <= 90 ? PIVOT_X : -PIVOT_X) * TANK_SCALE + Math.cos(a) * BARREL_LEN * TANK_SCALE;
-      const ty = tank.y + PIVOT_Y * TANK_SCALE + Math.sin(a) * BARREL_LEN * TANK_SCALE;
+      const tx = tank.x + (tank.angle <= 90 ? PIVOT_X : -PIVOT_X) + Math.cos(a) * BARREL_LEN;
+      const ty = tank.y + PIVOT_Y + Math.sin(a) * BARREL_LEN;
       this.emitFire(tx, ty, 0, Math.cos(a) * 60, Math.sin(a) * 60, 0, 0.14, 8, 22, '#fff2c0', '#ff9a3a', 1);
       for (let i = 0; i < 5; i++) {
         this.emitSmoke(tx, ty, 0, Math.cos(a) * (30 + Math.random() * 50) + (Math.random() - 0.5) * 25, Math.sin(a) * (30 + Math.random() * 50) + 8, (Math.random() - 0.5) * 20, 0.8 + Math.random() * 0.5, 4, 14, '#bdb6ad', 0.5);
@@ -1541,8 +1581,8 @@ export class DioramaRenderer {
     const ca = g.getAttribute('color') as THREE.BufferAttribute;
     const rad = (opts.aim.angle * Math.PI) / 180;
     const speed = opts.aim.power * POWER_TO_SPEED;
-    let x = me.x + (opts.aim.angle <= 90 ? 26 : -26) + Math.cos(rad) * 69;
-    let y = me.y + 38 + Math.sin(rad) * 69;
+    let x = me.x + (opts.aim.angle <= 90 ? PIVOT_X : -PIVOT_X) + Math.cos(rad) * BARREL_LEN;
+    let y = me.y + PIVOT_Y + Math.sin(rad) * BARREL_LEN;
     let vx = Math.cos(rad) * speed;
     let vy = Math.sin(rad) * speed;
     const N = pa.count;
