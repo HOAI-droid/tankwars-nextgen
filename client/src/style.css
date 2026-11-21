@@ -334,3 +334,46 @@ input[type='range']::-moz-range-thumb { width: 14px; height: 20px; background: v
 @media (hover: none) and (max-width: 880px) { .step { display: inline-block; } }
 
 .toast { position: fixed; z-index: 90; top: calc(70px + var(--safe-t)); left: 50%; transform: translateX(-50%); padding: 10px 22px; background: var(--panel-solid); border: 1px solid var(--line-hot); font-weight: 700; letter-spacing: 1px; animation: fadeIn .3s ease both; }
+
+/* ---------- Konzept-Look: gebürsteter Stahl, abgerundete Facetten ---------- */
+:root {
+  --steel: linear-gradient(180deg, rgba(58, 66, 82, 0.92) 0%, rgba(26, 31, 42, 0.94) 55%, rgba(18, 22, 31, 0.96) 100%);
+  --steel-border: rgba(176, 188, 206, 0.55);
+  --bevel: inset 0 1px 0 rgba(255, 255, 255, 0.28), inset 0 -1px 0 rgba(0, 0, 0, 0.6), 0 6px 18px rgba(0, 0, 0, 0.5);
+}
+.panel, .r-row, #wind-box, .sys, #deck, .wcard, .step, .meter, .card, .item, .res, .pitem, .btn, .fire, .input, .card select {
+  clip-path: none !important;
+  border-radius: 9px;
+}
+.r-row, #wind-box, .sys, #deck, .wcard, .step, .card, .item, .res {
+  background: var(--steel);
+  border: 1px solid var(--steel-border);
+  box-shadow: var(--bevel);
+}
+.r-row { padding: 6px 12px 6px 0; overflow: hidden; }
+.r-row .bar { width: 8px; border-radius: 0; }
+.r-row .nm { font-size: 14px; }
+#deck { border-radius: 12px; padding: 12px 16px; }
+#deck::after { display: none; }
+#wind-box { border-radius: 8px; padding: 5px 18px; }
+.sys { border-radius: 10px; height: 40px; min-width: 44px; font-size: 14px; }
+.wcard { border-radius: 8px; min-width: 96px; padding: 8px 12px; }
+.wcard.sel { background: linear-gradient(180deg, rgba(150, 86, 40, 0.65), rgba(88, 46, 22, 0.8)); border-color: #ffb066; }
+.step { border-radius: 7px; width: 32px; height: 32px; }
+.meter { border-radius: 8px; width: 60px; height: 60px; border: 1px solid var(--steel-border); box-shadow: var(--bevel); }
+.dial { width: 60px; height: 60px; border: 1px solid var(--steel-border); box-shadow: var(--bevel); }
+.fire {
+  border-radius: 12px; width: 150px;
+  background: linear-gradient(180deg, #ff9a3c 0%, #ff5a1a 45%, #d82a12 100%);
+  border: 2px solid #ffd08a;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.55), 0 0 22px rgba(255, 110, 40, 0.55), 0 6px 16px rgba(0,0,0,.5);
+}
+.fire span { font-family: var(--ui); font-weight: 700; font-size: 26px; letter-spacing: 2px; }
+.fire:disabled { border-color: rgba(176,188,206,.35); box-shadow: var(--bevel); }
+.btn { border-radius: 10px; border: 1px solid rgba(255,255,255,.25); box-shadow: var(--bevel); }
+.btn.primary { background: linear-gradient(180deg, #ff9a3c, #d82a12); border-color: #ffd08a; }
+.card { border-radius: 14px; }
+#round-label { font-family: var(--ui); font-weight: 700; font-size: 30px; letter-spacing: 3px; text-shadow: 0 2px 10px #000, 0 0 18px rgba(0,0,0,.7); }
+#turn-info { font-size: 16px; letter-spacing: 1.5px; }
+.logo h1, .code-big, .shop-head h2, .cash { font-family: var(--ui); font-weight: 700; }
+.logo h1 { letter-spacing: 6px; }

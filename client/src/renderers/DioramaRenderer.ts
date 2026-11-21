@@ -32,6 +32,8 @@ interface TankVisual {
   recoil: number;
   smokeT: number;
   bodyMat: THREE.MeshStandardMaterial;
+  body: THREE.Group;
+  yaw: number;
 }
 
 interface Fx {
@@ -68,7 +70,13 @@ interface Cloud {
   baseY: number;
 }
 
-const TERRAIN_DEPTH = 90;
+const TERRAIN_DEPTH = 210;
+const TUFTS = 4200;
+const ROCKS = 60;
+const TREES = 30;
+const RAIN = 900;
+const MISTS = 14;
+const TANK_SCALE = 1.85;
 const MAX_DEBRIS = 260;
 const FIRE_POOL = 180;
 const SMOKE_POOL = 320;
@@ -88,20 +96,38 @@ const SKY_VERT = /* glsl */ `
 const SKY_FRAG = /* glsl */ `
   varying vec3 vDir;
   uniform vec3 sunDir;
+  uniform float time;
+  float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+  float noise(vec2 p) {
+    vec2 i = floor(p), f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(hash(i), hash(i + vec2(1, 0)), f.x), mix(hash(i + vec2(0, 1)), hash(i + vec2(1, 1)), f.x), f.y);
+  }
+  float fbm(vec2 p) {
+    float a = 0.5, s = 0.0;
+    for (int i = 0; i < 5; i++) { s += a * noise(p); p = p * 2.03 + 11.7; a *= 0.5; }
+    return s;
+  }
   void main() {
     vec3 d = normalize(vDir);
-    float h = d.y;
-    vec3 horizon = vec3(1.00, 0.70, 0.46);
-    vec3 low     = vec3(0.98, 0.55, 0.40);
-    vec3 mid     = vec3(0.34, 0.50, 0.86);
-    vec3 zenith  = vec3(0.06, 0.12, 0.38);
-    vec3 col = mix(horizon, mid, smoothstep(0.0, 0.32, h));
-    col = mix(col, zenith, smoothstep(0.25, 0.85, h));
-    col = mix(col, low * 0.55, 1.0 - smoothstep(-0.25, 0.0, h));
-    float s = max(dot(d, normalize(sunDir)), 0.0);
-    col += vec3(1.0, 0.62, 0.30) * pow(s, 5.0) * 0.45;
-    col += vec3(1.0, 0.80, 0.55) * pow(s, 60.0) * 0.9;
-    col += vec3(1.0, 0.92, 0.75) * pow(s, 1800.0) * 5.0;
+    float h = max(d.y, -0.05);
+    vec3 horizon = vec3(0.50, 0.54, 0.58);
+    vec3 mid     = vec3(0.24, 0.28, 0.34);
+    vec3 zenith  = vec3(0.07, 0.09, 0.13);
+    vec3 col = mix(horizon, mid, smoothstep(0.0, 0.35, h));
+    col = mix(col, zenith, smoothstep(0.3, 0.95, h));
+    float sd = max(dot(d, normalize(sunDir)), 0.0);
+    vec2 p = d.xz / (h + 0.22) * 0.9 + vec2(time * 0.012, 0.0);
+    float c = fbm(p);
+    float cloud = smoothstep(0.38, 0.78, c);
+    float lit = pow(sd, 3.0);
+    vec3 cloudDark = vec3(0.11, 0.125, 0.15);
+    vec3 cloudLit  = vec3(1.0, 0.66, 0.38);
+    vec3 cc = mix(cloudDark, cloudLit, lit * (1.0 - cloud * 0.35));
+    cc += vec3(1.0, 0.8, 0.55) * smoothstep(0.55, 0.38, c) * lit * 0.9 * cloud;
+    col = mix(col, cc, cloud * 0.92);
+    col += vec3(1.0, 0.62, 0.30) * pow(sd, 9.0) * 0.55 * (1.0 - cloud * 0.55);
+    col += vec3(1.0, 0.85, 0.6) * pow(sd, 500.0) * 6.0 * (1.0 - cloud * 0.9);
     gl_FragColor = vec4(col, 1.0);
   }
 `;
@@ -226,8 +252,21 @@ export class DioramaRenderer {
   private camera: THREE.PerspectiveCamera;
   private sun!: THREE.DirectionalLight;
 
-  private chunkMeshes = new Map<number, THREE.Mesh>();
-  private terrainMat: THREE.MeshStandardMaterial;
+  private chunkMeshes = new Map<number, THREE.Group>();
+  private ext = new Map<number, THREE.Group>();
+  private faceMat!: THREE.MeshStandardMaterial;
+  private topMat!: THREE.MeshStandardMaterial;
+  private tufts!: THREE.InstancedMesh;
+  private rocks!: THREE.InstancedMesh;
+  private trees!: THREE.InstancedMesh;
+  private foliageSeed: Array<{ x: number; z: number; s: number; r: number }> = [];
+  private rockSeed: Array<{ x: number; z: number; s: number; r: number }> = [];
+  private treeSeed: Array<{ x: number; z: number; s: number }> = [];
+  private swayUniform = { value: 0 };
+  private rain!: THREE.LineSegments;
+  private mists: THREE.Sprite[] = [];
+  private skyMat!: THREE.ShaderMaterial;
+  private texLoader = new THREE.TextureLoader();
 
   private tankVisuals = new Map<string, TankVisual>();
   private projMeshes = new Map<string, { mesh: THREE.Group; trail: number }>();
@@ -268,16 +307,16 @@ export class DioramaRenderer {
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.05;
+    this.renderer.toneMappingExposure = 1.2;
 
     this.scene = new THREE.Scene();
-    this.scene.fog = new THREE.Fog('#e0a982', 950, 2500);
+    this.scene.fog = new THREE.Fog('#6b7783', 800, 2800);
 
     const pmrem = new THREE.PMREMGenerator(this.renderer);
     this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
-    this.scene.environmentIntensity = 0.38;
+    this.scene.environmentIntensity = 0.5;
 
-    this.camera = new THREE.PerspectiveCamera(36, window.innerWidth / window.innerHeight, 10, 9000);
+    this.camera = new THREE.PerspectiveCamera(38, window.innerWidth / window.innerHeight, 10, 9000);
 
     const rt = new THREE.WebGLRenderTarget(window.innerWidth, window.innerHeight, {
       type: THREE.HalfFloatType,
@@ -285,7 +324,7 @@ export class DioramaRenderer {
     });
     this.composer = new EffectComposer(this.renderer, rt);
     this.composer.addPass(new RenderPass(this.scene, this.camera));
-    this.bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.42, 0.5, 0.95);
+    this.bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.34, 0.6, 0.96);
     this.composer.addPass(this.bloomPass);
     this.composer.addPass(new ShaderPass(TiltShiftShader));
     this.gradePass = new ShaderPass(GradeShader);
@@ -295,14 +334,8 @@ export class DioramaRenderer {
     this.setupSky();
     this.setupLights();
     this.setupStage();
-    this.setupMountains();
-    this.setupClouds();
-
-    this.terrainMat = new THREE.MeshStandardMaterial({
-      vertexColors: true,
-      roughness: 0.92,
-      metalness: 0.0,
-    });
+    this.setupFoliage();
+    this.setupWeather();
 
     // Sprite-Pools
     const mk = (additive: boolean): Fx => {
@@ -387,19 +420,27 @@ export class DioramaRenderer {
 
   /* ----------------------------- Szene ----------------------------- */
 
+
+  private loadTex(path: string, rx = 1, ry = 1, srgb = true): THREE.Texture {
+    const t = this.texLoader.load(import.meta.env.BASE_URL + 'tex/' + path);
+    t.wrapS = t.wrapT = THREE.RepeatWrapping;
+    t.repeat.set(rx, ry);
+    t.anisotropy = 8;
+    if (srgb) t.colorSpace = THREE.SRGBColorSpace;
+    return t;
+  }
+
   private setupSky(): void {
-    const sunDir = new THREE.Vector3(0.62, 0.22, -0.75).normalize();
-    const sky = new THREE.Mesh(
-      new THREE.SphereGeometry(3400, 32, 24),
-      new THREE.ShaderMaterial({
-        vertexShader: SKY_VERT,
-        fragmentShader: SKY_FRAG,
-        uniforms: { sunDir: { value: sunDir } },
-        side: THREE.BackSide,
-        depthWrite: false,
-        fog: false,
-      })
-    );
+    const sunDir = new THREE.Vector3(0.74, 0.2, -0.64).normalize();
+    this.skyMat = new THREE.ShaderMaterial({
+      vertexShader: SKY_VERT,
+      fragmentShader: SKY_FRAG,
+      uniforms: { sunDir: { value: sunDir }, time: { value: 0 } },
+      side: THREE.BackSide,
+      depthWrite: false,
+      fog: false,
+    });
+    const sky = new THREE.Mesh(new THREE.SphereGeometry(3400, 32, 24), this.skyMat);
     sky.position.set(WORLD_WIDTH / 2, 0, 0);
     sky.renderOrder = -10;
     this.scene.add(sky);
@@ -408,99 +449,216 @@ export class DioramaRenderer {
   private skySunDir = new THREE.Vector3();
 
   private setupLights(): void {
-    this.scene.add(new THREE.HemisphereLight('#ffd9b5', '#34406b', 0.75));
+    this.scene.add(new THREE.HemisphereLight('#b7c6da', '#3a4634', 1.5));
 
-    const sun = new THREE.DirectionalLight('#ffd2a0', 2.5);
-    sun.position.set(WORLD_WIDTH / 2 + 520, 460, 380);
+    const sun = new THREE.DirectionalLight('#ffe0b8', 3.6);
+    sun.position.set(WORLD_WIDTH / 2 + 620, 620, 520);
     sun.target.position.set(WORLD_WIDTH / 2, 120, 0);
     sun.castShadow = true;
     sun.shadow.mapSize.set(2048, 2048);
-    sun.shadow.camera.left = -720;
-    sun.shadow.camera.right = 720;
-    sun.shadow.camera.top = 420;
-    sun.shadow.camera.bottom = -320;
+    sun.shadow.camera.left = -780;
+    sun.shadow.camera.right = 780;
+    sun.shadow.camera.top = 520;
+    sun.shadow.camera.bottom = -380;
     sun.shadow.camera.near = 50;
-    sun.shadow.camera.far = 1600;
-    sun.shadow.bias = -0.0006;
-    sun.shadow.normalBias = 0.6;
+    sun.shadow.camera.far = 2000;
+    sun.shadow.bias = -0.0005;
+    sun.shadow.normalBias = 0.8;
     this.scene.add(sun, sun.target);
     this.sun = sun;
 
-    const rim = new THREE.DirectionalLight('#7fa8ff', 0.9);
-    rim.position.set(-500, 260, -300);
+    // warmes Gegenlicht von rechts hinten (Kontur auf Panzern)
+    const rim = new THREE.DirectionalLight('#ffb36b', 2.2);
+    rim.position.set(WORLD_WIDTH / 2 + 700, 260, -520);
     rim.target.position.set(WORLD_WIDTH / 2, 120, 0);
     this.scene.add(rim, rim.target);
+    const fill = new THREE.DirectionalLight('#7e97b8', 0.7);
+    fill.position.set(-600, 300, 400);
+    fill.target.position.set(WORLD_WIDTH / 2, 120, 0);
+    this.scene.add(fill, fill.target);
   }
 
   private setupStage(): void {
-    const w = WORLD_WIDTH + 40;
-    const d = TERRAIN_DEPTH + 30;
-    const plinthMat = new THREE.MeshStandardMaterial({ color: '#171c28', roughness: 0.42, metalness: 0.55 });
-    const plinth = new THREE.Mesh(new THREE.BoxGeometry(w, 46, d), plinthMat);
-    plinth.position.set(WORLD_WIDTH / 2, -23.5, 0);
-    plinth.receiveShadow = true;
-    plinth.castShadow = true;
-    this.scene.add(plinth);
+    // Materialien mit Foto-Texturen aus dem Konzeptbild
+    const dirt = this.loadTex('dirt.jpg');
+    const grass = this.loadTex('grass.jpg');
+    this.faceMat = new THREE.MeshStandardMaterial({ map: dirt, bumpMap: dirt, bumpScale: 3.2, vertexColors: true, roughness: 0.96, metalness: 0 });
+    this.topMat = new THREE.MeshStandardMaterial({ map: grass, bumpMap: grass, bumpScale: 2.4, vertexColors: true, roughness: 0.95, metalness: 0 });
 
-    const trim = new THREE.Mesh(
-      new THREE.BoxGeometry(w + 2, 1.2, 1.2),
-      new THREE.MeshStandardMaterial({ color: '#ff8a3d', emissive: '#ff6a1a', emissiveIntensity: 0.35, roughness: 0.4 })
+    // Painted Backdrop: Berge, Wald und Nebel aus dem Konzeptbild
+    const bd = this.loadTex('backdrop.webp');
+    bd.wrapS = bd.wrapT = THREE.ClampToEdgeWrapping;
+    const plate = new THREE.Mesh(
+      new THREE.PlaneGeometry(2300, 2300 * (580 / 1600)),
+      new THREE.MeshBasicMaterial({ map: bd, transparent: true, depthWrite: false, fog: false, color: '#dfe5ee' })
     );
-    trim.position.set(WORLD_WIDTH / 2, -12, d / 2 + 0.2);
-    this.scene.add(trim);
-
-    const floor = new THREE.Mesh(
-      new THREE.PlaneGeometry(9000, 9000),
-      new THREE.MeshStandardMaterial({ color: '#0d111a', roughness: 0.3, metalness: 0.7 })
-    );
-    floor.rotation.x = -Math.PI / 2;
-    floor.position.set(WORLD_WIDTH / 2, -47, -400);
-    floor.receiveShadow = true;
-    this.scene.add(floor);
+    plate.position.set(WORLD_WIDTH / 2, 40 + (2300 * (580 / 1600)) / 2, -760);
+    plate.renderOrder = -5;
+    this.scene.add(plate);
   }
 
-  private setupMountains(): void {
-    const layers = [
-      { z: -380, base: 40, amp: 190, color: '#7d6a86', seed: 1.3 },
-      { z: -620, base: 90, amp: 240, color: '#6a5d7c', seed: 4.1 },
-      { z: -900, base: 150, amp: 260, color: '#585074', seed: 7.7 },
-      { z: -1300, base: 200, amp: 300, color: '#4a4668', seed: 2.9 },
-    ];
-    for (const L of layers) {
-      const pts: THREE.Vector2[] = [new THREE.Vector2(-2200, -60)];
-      for (let x = -2200; x <= 3200; x += 40) {
-        const n =
-          Math.sin(x * 0.0041 + L.seed) * 0.5 +
-          Math.sin(x * 0.0113 + L.seed * 2.1) * 0.28 +
-          Math.sin(x * 0.027 + L.seed * 0.7) * 0.12 +
-          Math.abs(Math.sin(x * 0.0072 + L.seed * 3.3)) * 0.35;
-        pts.push(new THREE.Vector2(x, L.base + (n + 0.4) * L.amp * 0.6));
-      }
-      pts.push(new THREE.Vector2(3200, -60));
-      const mesh = new THREE.Mesh(new THREE.ShapeGeometry(new THREE.Shape(pts)), new THREE.MeshBasicMaterial({ color: L.color, fog: true }));
-      mesh.position.z = L.z;
-      this.scene.add(mesh);
+  private setupFoliage(): void {
+    const hd = TERRAIN_DEPTH / 2;
+    // Grasbüschel (4 gekreuzte Halme, per Vertex-Farbe von dunkel nach hell)
+    const pos: number[] = [];
+    const col: number[] = [];
+    const base = new THREE.Color('#0a120a');
+    const mid = new THREE.Color('#223a18');
+    const tip = new THREE.Color('#6d7c35');
+    for (let b = 0; b < 4; b++) {
+      const a = (b / 4) * Math.PI + 0.3;
+      const ca = Math.cos(a), sa = Math.sin(a);
+      const pts: Array<[number, number, THREE.Color]> = [
+        [-0.9, 0, base], [0.9, 0, base], [-0.6, 0.55, mid], [0.6, 0.55, mid], [0.12 * (b - 1.5), 1.05, tip],
+      ];
+      const v = (i: number) => {
+        const [x, y, c] = pts[i];
+        pos.push(x * ca, y, x * sa);
+        col.push(c.r, c.g, c.b);
+      };
+      [0, 1, 2, 1, 3, 2, 2, 3, 4].forEach(v);
+    }
+    const bg = new THREE.BufferGeometry();
+    bg.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    bg.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+    bg.computeVertexNormals();
+    const bm = new THREE.MeshStandardMaterial({ vertexColors: true, side: THREE.DoubleSide, roughness: 0.9 });
+    const uni = this.swayUniform;
+    bm.onBeforeCompile = (sh) => {
+      sh.uniforms.uTime = uni;
+      sh.vertexShader = 'uniform float uTime;\n' + sh.vertexShader.replace(
+        '#include <begin_vertex>',
+        `#include <begin_vertex>
+         float ph = instanceMatrix[3].x * 0.07 + instanceMatrix[3].z * 0.05;
+         transformed.x += sin(uTime * 2.2 + ph) * 0.22 * position.y * position.y;
+         transformed.z += cos(uTime * 1.7 + ph) * 0.12 * position.y * position.y;`
+      );
+    };
+    this.tufts = new THREE.InstancedMesh(bg, bm, TUFTS);
+    this.tufts.frustumCulled = false;
+    this.tufts.receiveShadow = true;
+    this.scene.add(this.tufts);
+    for (let i = 0; i < TUFTS; i++) {
+      // vorne dichter als hinten
+      const f = Math.pow(Math.random(), 0.7);
+      this.foliageSeed.push({ x: Math.random() * WORLD_WIDTH, z: -hd + 5 + f * (TERRAIN_DEPTH - 12), s: 4 + Math.random() * 6, r: Math.random() * 6.28 });
+    }
+
+    // Felsbrocken
+    const rockTex = this.loadTex('dirt.jpg', 1, 1);
+    this.rocks = new THREE.InstancedMesh(
+      new THREE.IcosahedronGeometry(1, 1),
+      new THREE.MeshStandardMaterial({ map: rockTex, bumpMap: rockTex, bumpScale: 2, color: '#b9b2a8', roughness: 0.92, flatShading: true }),
+      ROCKS
+    );
+    this.rocks.castShadow = true;
+    this.rocks.receiveShadow = true;
+    this.rocks.frustumCulled = false;
+    this.scene.add(this.rocks);
+    for (let i = 0; i < ROCKS; i++) {
+      this.rockSeed.push({ x: Math.random() * WORLD_WIDTH, z: -hd + 8 + Math.random() * (TERRAIN_DEPTH - 20), s: 2.5 + Math.pow(Math.random(), 2) * 9, r: Math.random() * 6.28 });
+    }
+
+    // Tannen im Hintergrund
+    const treeGeo = this.buildTreeGeometry();
+    this.trees = new THREE.InstancedMesh(treeGeo, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9, flatShading: true }), TREES);
+    this.trees.castShadow = true;
+    this.trees.frustumCulled = false;
+    this.scene.add(this.trees);
+    for (let i = 0; i < TREES; i++) {
+      this.treeSeed.push({ x: Math.random() * WORLD_WIDTH, z: -hd + 6 + Math.random() * (hd * 0.8), s: 11 + Math.random() * 14 });
     }
   }
 
-  private setupClouds(): void {
-    const cloudMat = new THREE.MeshStandardMaterial({ color: '#ffe9d6', roughness: 1, emissive: '#ff9f6a', emissiveIntensity: 0.25, flatShading: true });
-    const puffGeo = new THREE.IcosahedronGeometry(1, 1);
-
-    for (let i = 0; i < 9; i++) {
-      const group = new THREE.Group();
-      const puffCount = 4 + (i % 3);
-      for (let p = 0; p < puffCount; p++) {
-        const puff = new THREE.Mesh(puffGeo, cloudMat);
-        const radius = 16 + Math.random() * 16;
-        puff.scale.set(radius * 1.5, radius * 0.8, radius);
-        puff.position.set((p - (puffCount - 1) / 2) * 24, (Math.random() - 0.5) * 9, (Math.random() - 0.5) * 12);
-        group.add(puff);
+  private buildTreeGeometry(): THREE.BufferGeometry {
+    const geos: THREE.BufferGeometry[] = [];
+    const paint = (g: THREE.BufferGeometry, c: THREE.Color, lo = 0.6) => {
+      const n = g.getAttribute('position').count;
+      const arr = new Float32Array(n * 3);
+      const pa = g.getAttribute('position');
+      for (let i = 0; i < n; i++) {
+        const k = lo + (1 - lo) * Math.min(1, Math.max(0, (pa.getY(i) + 2) / 6));
+        arr.set([c.r * k, c.g * k, c.b * k], i * 3);
       }
-      const baseY = 400 + Math.random() * 170;
-      group.position.set((i / 9) * (WORLD_WIDTH + 400) - 200, baseY, -150 - Math.random() * 260);
-      this.scene.add(group);
-      this.clouds.push({ group, speedFactor: 0.5 + Math.random() * 0.7, bobOffset: Math.random() * Math.PI * 2, baseY });
+      g.setAttribute('color', new THREE.BufferAttribute(arr, 3));
+      return g;
+    };
+    const trunk = new THREE.CylinderGeometry(0.28, 0.4, 1.6, 6);
+    trunk.translate(0, 0.8, 0);
+    geos.push(paint(trunk, new THREE.Color('#3a2a1e'), 1));
+    for (let i = 0; i < 4; i++) {
+      const cone = new THREE.ConeGeometry(2.4 - i * 0.45, 3.2, 7);
+      cone.translate(0, 2.2 + i * 1.6, 0);
+      geos.push(paint(cone, new THREE.Color('#14281d'), 0.5));
+    }
+    // zusammenführen (nicht-indiziert)
+    const P: number[] = [];
+    const C: number[] = [];
+    geos.forEach((g) => {
+      const ng = g.toNonIndexed();
+      P.push(...Array.from(ng.getAttribute('position').array as Float32Array));
+      C.push(...Array.from(ng.getAttribute('color').array as Float32Array));
+    });
+    const out = new THREE.BufferGeometry();
+    out.setAttribute('position', new THREE.Float32BufferAttribute(P, 3));
+    out.setAttribute('color', new THREE.Float32BufferAttribute(C, 3));
+    out.computeVertexNormals();
+    return out;
+  }
+
+  private syncFoliage(sim: GameSimulation): void {
+    const t = sim.terrain;
+    const m = this.dummy;
+    this.foliageSeed.forEach((f, i) => {
+      const h = t.getHeight(f.x);
+      m.position.set(f.x, h - 0.5, f.z);
+      m.rotation.set(0, f.r, 0);
+      m.scale.set(f.s * 0.55, f.s * (h < 14 ? 0.01 : 1), f.s * 0.55);
+      m.updateMatrix();
+      this.tufts.setMatrixAt(i, m.matrix);
+    });
+    this.tufts.instanceMatrix.needsUpdate = true;
+    this.rockSeed.forEach((r, i) => {
+      const h = t.getHeight(r.x);
+      m.position.set(r.x, h + r.s * 0.2, r.z);
+      m.rotation.set(r.r, r.r * 1.7, r.r * 0.3);
+      m.scale.set(r.s, r.s * 0.65, r.s * 0.85);
+      m.updateMatrix();
+      this.rocks.setMatrixAt(i, m.matrix);
+    });
+    this.rocks.instanceMatrix.needsUpdate = true;
+    this.treeSeed.forEach((tr, i) => {
+      const h = t.getHeight(tr.x);
+      m.position.set(tr.x, h - 1, tr.z);
+      m.rotation.set(0, tr.x, 0);
+      m.scale.set(tr.s * 0.5, tr.s * 0.5, tr.s * 0.5);
+      m.updateMatrix();
+      this.trees.setMatrixAt(i, m.matrix);
+    });
+    this.trees.instanceMatrix.needsUpdate = true;
+  }
+
+  private setupWeather(): void {
+    // Regen
+    const p = new Float32Array(RAIN * 6);
+    for (let i = 0; i < RAIN; i++) {
+      const x = -150 + Math.random() * 1300, y = Math.random() * 650, z = -200 + Math.random() * 420;
+      p.set([x, y, z, x, y + 16, z], i * 6);
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(p, 3));
+    this.rain = new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color: '#cfd9e6', transparent: true, opacity: 0.28, fog: false, depthWrite: false }));
+    this.rain.frustumCulled = false;
+    this.scene.add(this.rain);
+
+    // Nebelbänke im Tal
+    for (let i = 0; i < MISTS; i++) {
+      const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.glowTex, color: '#a9b6c2', transparent: true, opacity: 0.16, depthWrite: false, fog: false }));
+      sp.position.set(Math.random() * WORLD_WIDTH, 60 + Math.random() * 190, -130 - Math.random() * 120);
+      const s = 330 + Math.random() * 320;
+      sp.scale.set(s * 1.8, s * 0.55, 1);
+      this.scene.add(sp);
+      this.mists.push(sp);
     }
   }
 
@@ -508,22 +666,32 @@ export class DioramaRenderer {
 
   private updateAtmosphere(wind: number, dt: number): void {
     this.elapsed += dt;
-    const drift = (wind === 0 ? 5 : wind * 0.9) * dt;
-    for (const c of this.clouds) {
-      c.group.position.x += drift * c.speedFactor;
-      c.group.position.y = c.baseY + Math.sin(this.elapsed * 0.8 + c.bobOffset) * 4;
-      if (c.group.position.x > WORLD_WIDTH + 260) c.group.position.x = -260;
-      if (c.group.position.x < -260) c.group.position.x = WORLD_WIDTH + 260;
-    }
-    const arr = this.motes.geometry.getAttribute('position') as THREE.BufferAttribute;
-    for (let i = 0; i < MOTES; i++) {
-      let x = arr.getX(i) + (wind * 2.6 + Math.sin(this.elapsed + i) * 6) * dt;
-      const y = arr.getY(i) + Math.cos(this.elapsed * 0.7 + i * 1.3) * 5 * dt;
-      if (x > WORLD_WIDTH + 40) x = -40;
-      if (x < -40) x = WORLD_WIDTH + 40;
-      arr.setXYZ(i, x, y, arr.getZ(i));
+    this.swayUniform.value = this.elapsed;
+    this.skyMat.uniforms.time.value = this.elapsed;
+    const arr = this.rain.geometry.getAttribute('position') as THREE.BufferAttribute;
+    const slant = wind * 1.8 + 40;
+    for (let i = 0; i < RAIN; i++) {
+      let x = arr.getX(i * 2) + slant * dt;
+      let y = arr.getY(i * 2) - 620 * dt;
+      if (y < -30) { y += 700; x = -150 + Math.random() * 1300; }
+      if (x > 1150) x -= 1300;
+      arr.setXYZ(i * 2, x, y, arr.getZ(i * 2));
+      arr.setXYZ(i * 2 + 1, x + slant * 0.026, y + 16, arr.getZ(i * 2 + 1));
     }
     arr.needsUpdate = true;
+    for (const m of this.mists) {
+      m.position.x += (wind * 0.4 + 8) * dt;
+      if (m.position.x > WORLD_WIDTH + 400) m.position.x = -400;
+    }
+    const mp = this.motes.geometry.getAttribute('position') as THREE.BufferAttribute;
+    for (let i = 0; i < MOTES; i++) {
+      let x = mp.getX(i) + (wind * 2.6 + Math.sin(this.elapsed + i) * 6) * dt;
+      const y = mp.getY(i) + Math.cos(this.elapsed * 0.7 + i * 1.3) * 5 * dt;
+      if (x > WORLD_WIDTH + 40) x = -40;
+      if (x < -40) x = WORLD_WIDTH + 40;
+      mp.setXYZ(i, x, y, mp.getZ(i));
+    }
+    mp.needsUpdate = true;
   }
 
   public resize(): void {
@@ -536,7 +704,7 @@ export class DioramaRenderer {
     this.composer.setSize(w, h);
     this.bloomPass.setSize(w, h);
     this.camera.aspect = w / h;
-    this.baseZ = 1000 * Math.max(1, 1.45 / this.camera.aspect);
+    this.baseZ = 1060 * Math.max(1, 1.45 / this.camera.aspect);
     this.camera.updateProjectionMatrix();
   }
 
@@ -554,121 +722,132 @@ export class DioramaRenderer {
   private syncTerrain(sim: GameSimulation): void {
     if (sim.terrain.dirtyChunks.size === 0) return;
     for (const chunkIdx of sim.terrain.dirtyChunks) {
-      const oldMesh = this.chunkMeshes.get(chunkIdx);
-      if (oldMesh) {
-        this.scene.remove(oldMesh);
-        oldMesh.geometry.dispose();
+      const old = this.chunkMeshes.get(chunkIdx);
+      if (old) {
+        this.scene.remove(old);
+        old.children.forEach((c) => (c as THREE.Mesh).geometry.dispose());
       }
-      const mesh = this.buildChunkMesh(sim, chunkIdx);
-      this.scene.add(mesh);
-      this.chunkMeshes.set(chunkIdx, mesh);
+      const g = this.buildChunkMesh(sim, chunkIdx);
+      this.scene.add(g);
+      this.chunkMeshes.set(chunkIdx, g);
     }
     sim.terrain.dirtyChunks.clear();
+    this.syncFoliage(sim);
+    for (const side of [-1, 1] as const) {
+      const old = this.ext.get(side);
+      if (old) {
+        this.scene.remove(old);
+        old.children.forEach((c) => (c as THREE.Mesh).geometry.dispose());
+      }
+      const g = this.buildExtension(sim, side);
+      this.scene.add(g);
+      this.ext.set(side, g);
+    }
   }
 
-  private buildChunkMesh(sim: GameSimulation, chunkIdx: number): THREE.Mesh {
+  private buildChunkMesh(sim: GameSimulation, chunkIdx: number): THREE.Group {
     const t = sim.terrain;
     const startX = chunkIdx * CHUNK_SIZE;
     const endX = Math.min(t.width - 1, startX + CHUNK_SIZE);
-    const hd = TERRAIN_DEPTH / 2;
+    return this.buildSpan((x) => t.getHeight(x), startX, endX);
+  }
 
-    const pos: number[] = [];
-    const nor: number[] = [];
-    const col: number[] = [];
-
-    const lip0 = new THREE.Color('#86cf48');
-    const lip1 = new THREE.Color('#4a8a27');
-    const dirtA = new THREE.Color('#b07a47');
-    const dirtB = new THREE.Color('#82583a');
-    const dirtC = new THREE.Color('#5a4333');
-    const rock = new THREE.Color('#34323a');
-    const top = new THREE.Color('#6fb53a');
-    const c = new THREE.Color();
-
-    const vert = (x: number, y: number, z: number, n: [number, number, number], color: THREE.Color, j: number, shade = 1) => {
-      pos.push(x, y, z);
-      nor.push(n[0], n[1], n[2]);
-      col.push(color.r * j * shade, color.g * j * shade, color.b * j * shade);
+  /** Spiegelt das Gelände über die Ränder hinaus und lässt es zu Talwänden ansteigen. */
+  private buildExtension(sim: GameSimulation, side: -1 | 1): THREE.Group {
+    const t = sim.terrain;
+    const W = t.width - 1;
+    const hf = (x: number) => {
+      const d = side < 0 ? -x : x - W;
+      const mx = side < 0 ? Math.min(W, d) : Math.max(0, W - d);
+      return t.getHeight(mx) + Math.pow(Math.max(0, d - 10) / 55, 1.5) * 38;
     };
-    const quad = (
-      a: [number, number, number], b: [number, number, number], cc: [number, number, number], d: [number, number, number],
-      n: [number, number, number], ca: THREE.Color, cb: THREE.Color, cd: THREE.Color, cdd: THREE.Color, j: number, sa = 1, sb = 1, sc = 1, sd = 1
-    ) => {
-      // a,b,cc,d gegen den Uhrzeigersinn
-      vert(...a, n, ca, j, sa); vert(...b, n, cb, j, sb); vert(...cc, n, cd, j, sc);
-      vert(...a, n, ca, j, sa); vert(...cc, n, cd, j, sc); vert(...d, n, cdd, j, sd);
+    return side < 0 ? this.buildSpan(hf, -360, 0) : this.buildSpan(hf, W, W + 360);
+  }
+
+  private buildSpan(hf: (x: number) => number, startX: number, endX: number): THREE.Group {
+    const hd = TERRAIN_DEPTH / 2;
+    const LIP = 14;
+
+    const mk = () => ({ pos: [] as number[], nor: [] as number[], col: [] as number[], uv: [] as number[] });
+    const top = mk();
+    const face = mk();
+    const vert = (g: ReturnType<typeof mk>, x: number, y: number, z: number, n: [number, number, number], u: number, v: number, shade: number) => {
+      g.pos.push(x, y, z);
+      g.nor.push(n[0], n[1], n[2]);
+      g.uv.push(u, v);
+      g.col.push(shade, shade, shade);
     };
 
     const step = 2;
     for (let x = startX; x < endX; x += step) {
       const nx = Math.min(endX, x + step);
-      const h1 = t.getHeight(x);
-      const h2 = t.getHeight(nx);
-      const j = 0.9 + hash(x * 0.5) * 0.2;
+      const h1 = hf(x);
+      const h2 = hf(nx);
+      const j = 0.88 + hash(x * 0.5) * 0.24;
       const slope = (a: number) => {
-        const dh = (t.getHeight(a + 2) - t.getHeight(a - 2)) / 4;
+        const dh = (hf(a + 2) - hf(a - 2)) / 4;
         const l = Math.hypot(dh, 1);
         return [-dh / l, 1 / l, 0] as [number, number, number];
       };
       const nA = slope(x);
       const nB = slope(nx);
+      const S = 260; // Texturmaßstab
 
-      // Oberfläche (Normalen pro Vertex für weiches Licht)
-      const steep = Math.min(1, Math.abs(h2 - h1) / 3);
-      c.copy(top).lerp(dirtA, steep * 0.6);
-      vert(x, h1, hd, nA, c, j); vert(nx, h2, hd, nB, c, j); vert(nx, h2, -hd, nB, c, j, 0.82);
-      vert(x, h1, hd, nA, c, j); vert(nx, h2, -hd, nB, c, j, 0.82); vert(x, h1, -hd, nA, c, j, 0.82);
+      // Oberfläche: breites Tal (z = -hd … +hd), nach hinten leicht abgedunkelt (Dunst)
+      const zs = [-hd, -hd * 0.35, hd];
+      const sh = [0.55, 0.9, 1.0];
+      for (let k = 0; k < 2; k++) {
+        const za = zs[k], zb = zs[k + 1];
+        const sa = sh[k] * j, sb = sh[k + 1] * j;
+        vert(top, x, h1, zb, nA, x / S, zb / S, sb);
+        vert(top, nx, h2, zb, nB, nx / S, zb / S, sb);
+        vert(top, nx, h2, za, nB, nx / S, za / S, sa);
+        vert(top, x, h1, zb, nA, x / S, zb / S, sb);
+        vert(top, nx, h2, za, nB, nx / S, za / S, sa);
+        vert(top, x, h1, za, nA, x / S, za / S, sa);
+      }
 
-      // Schnittfläche vorne: Grasnarbe + Gesteinsschichten (Bänder in Welt-Y, daher durchgehend)
+      // Grasnarbe an der Vorderkante (Teil des Gras-Meshes)
       const nF: [number, number, number] = [0, 0, 1];
-      const lipH = 7;
-      const band = 14;
-      const hTop = Math.max(h1, h2);
-      const strata = (y: number): THREE.Color => {
-        const d = Math.max(0, hTop - y);
-        c.copy(dirtA).lerp(dirtB, Math.min(1, d / 45)).lerp(dirtC, Math.max(0, Math.min(1, (d - 45) / 90))).lerp(rock, Math.max(0, Math.min(1, (d - 130) / 140)));
-        const m = 0.78 + hash(Math.floor(y / band) * 3.7) * 0.4;
-        c.multiplyScalar(m);
-        return c;
-      };
-      const sub = (ya1: number, ya2: number, yb1: number, yb2: number, ca: THREE.Color, cb: THREE.Color) => {
-        // Streifen zwischen oberer (ya1/ya2) und unterer (yb1/yb2) Kante für Spalte x..nx
-        if (ya1 - yb1 < 0.01 && ya2 - yb2 < 0.01) return;
-        quad([x, yb1, hd], [nx, yb2, hd], [nx, ya2, hd], [x, ya1, hd], nF, cb, cb, ca, ca, j);
-      };
-      // Grasnarbe
-      sub(h1, h2, Math.max(0, h1 - lipH), Math.max(0, h2 - lipH), lip0, lip1);
-      // Schichten: von der Narbe abwärts bis y = 0
-      const topA = Math.max(0, h1 - lipH);
-      const topB = Math.max(0, h2 - lipH);
-      const yHi = Math.max(topA, topB);
-      let yb = Math.floor(yHi / band) * band;
-      let prevA = topA;
-      let prevB = topB;
-      const startCol = new THREE.Color();
-      // oberstes (angeschnittenes) Band
-      startCol.copy(strata(yHi));
-      while (true) {
-        const nextA = Math.max(0, Math.min(prevA, yb));
-        const nextB = Math.max(0, Math.min(prevB, yb));
-        const cTop = strata(yb + band * 0.5).clone();
-        const cBot = strata(Math.max(0, yb - band * 0.5)).clone().multiplyScalar(0.94);
-        sub(prevA, prevB, nextA, nextB, cTop, cBot);
-        prevA = nextA;
-        prevB = nextB;
-        if (yb <= 0) break;
-        yb -= band;
+      const l1 = h1 - LIP, l2 = h2 - LIP;
+      vert(top, x, l1, hd, nF, x / S, 0.0, 0.5 * j);
+      vert(top, nx, l2, hd, nF, nx / S, 0.0, 0.5 * j);
+      vert(top, nx, h2, hd, nF, nx / S, 0.1, 0.95 * j);
+      vert(top, x, l1, hd, nF, x / S, 0.0, 0.5 * j);
+      vert(top, nx, h2, hd, nF, nx / S, 0.1, 0.95 * j);
+      vert(top, x, h1, hd, nF, x / S, 0.1, 0.95 * j);
+
+      // Erd-/Felsschnitt vorne, nach unten ins Dunkel
+      const lv1 = [l1, l1 * 0.5, 0, -420];
+      const lv2 = [l2, l2 * 0.5, 0, -420];
+      const sd = [0.95, 0.8, 0.55, 0.08];
+      const D = 320;
+      for (let r = 0; r < 3; r++) {
+        const sa = sd[r] * j, sb = sd[r + 1] * j;
+        vert(face, x, lv1[r + 1], hd, nF, x / D, lv1[r + 1] / D, sb);
+        vert(face, nx, lv2[r + 1], hd, nF, nx / D, lv2[r + 1] / D, sb);
+        vert(face, nx, lv2[r], hd, nF, nx / D, lv2[r] / D, sa);
+        vert(face, x, lv1[r + 1], hd, nF, x / D, lv1[r + 1] / D, sb);
+        vert(face, nx, lv2[r], hd, nF, nx / D, lv2[r] / D, sa);
+        vert(face, x, lv1[r], hd, nF, x / D, lv1[r] / D, sa);
       }
     }
 
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-    geo.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
-    geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
-    const mesh = new THREE.Mesh(geo, this.terrainMat);
-    mesh.castShadow = true;
-    mesh.receiveShadow = true;
-    return mesh;
+    const group = new THREE.Group();
+    const build = (g: ReturnType<typeof mk>, mat: THREE.Material) => {
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(g.pos, 3));
+      geo.setAttribute('normal', new THREE.Float32BufferAttribute(g.nor, 3));
+      geo.setAttribute('color', new THREE.Float32BufferAttribute(g.col, 3));
+      geo.setAttribute('uv', new THREE.Float32BufferAttribute(g.uv, 2));
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      group.add(mesh);
+    };
+    build(top, this.topMat);
+    build(face, this.faceMat);
+    return group;
   }
 
   /* ----------------------------- Panzer ---------------------------- */
@@ -684,12 +863,17 @@ export class DioramaRenderer {
 
   private createTankVisual(colorHex: string): TankVisual {
     const group = new THREE.Group();
-    const bodyMat = new THREE.MeshStandardMaterial({ color: colorHex, roughness: 0.42, metalness: 0.35 });
-    const darkMat = new THREE.MeshStandardMaterial({ color: '#232830', roughness: 0.55, metalness: 0.6 });
-    const wheelMat = new THREE.MeshStandardMaterial({ color: '#4a525f', roughness: 0.5, metalness: 0.6 });
-    const trimMat = new THREE.MeshStandardMaterial({ color: '#c9ced8', roughness: 0.35, metalness: 0.8 });
+    const body = new THREE.Group();
+    group.add(body);
+    const bodyMat = new THREE.MeshStandardMaterial({ color: new THREE.Color(colorHex).multiplyScalar(0.74), roughness: 0.46, metalness: 0.32, envMapIntensity: 0.55 });
+    const darkMat = new THREE.MeshStandardMaterial({ color: '#1d2128', roughness: 0.5, metalness: 0.7 });
+    const rubber = new THREE.MeshStandardMaterial({ color: '#17191d', roughness: 0.95, metalness: 0.1 });
+    const wheelMat = new THREE.MeshStandardMaterial({ color: '#2c323b', roughness: 0.55, metalness: 0.7 });
+    const trimMat = new THREE.MeshStandardMaterial({ color: '#aeb5c1', roughness: 0.3, metalness: 0.9 });
+    const lampF = new THREE.MeshStandardMaterial({ color: '#fff3c9', emissive: '#ffd98a', emissiveIntensity: 2.6 });
+    const lampR = new THREE.MeshStandardMaterial({ color: '#ff3b30', emissive: '#ff2a1d', emissiveIntensity: 3.2 });
 
-    const add = (geo: THREE.BufferGeometry, mat: THREE.Material, parent: THREE.Object3D = group) => {
+    const add = (geo: THREE.BufferGeometry, mat: THREE.Material, parent: THREE.Object3D = body) => {
       const m = new THREE.Mesh(geo, mat);
       m.castShadow = true;
       m.receiveShadow = true;
@@ -697,75 +881,92 @@ export class DioramaRenderer {
       return m;
     };
 
-    // Ketten + Laufrollen
+    // Laufwerk
     for (const side of [-1, 1]) {
-      const z = side * 7.3;
-      const t = add(new THREE.BoxGeometry(23, 6.4, 4.2), darkMat);
-      t.position.set(0, 3.4, z);
+      const z = side * 8.2;
+      const tr = add(new THREE.BoxGeometry(27, 6.6, 4.6), rubber);
+      tr.position.set(0, 3.6, z);
       for (const e of [-1, 1]) {
-        const cap = add(new THREE.CylinderGeometry(3.2, 3.2, 4.2, 16), darkMat);
+        const cap = add(new THREE.CylinderGeometry(3.4, 3.4, 4.6, 18), rubber);
         cap.rotation.x = Math.PI / 2;
-        cap.position.set(e * 11.5, 3.2, z);
+        cap.position.set(e * 13.5, 3.4, z);
+        const sp = add(new THREE.CylinderGeometry(2.1, 2.1, 5.1, 12), wheelMat);
+        sp.rotation.x = Math.PI / 2;
+        sp.position.set(e * 13.5, 3.4, z);
       }
-      for (let i = -2; i <= 2; i++) {
-        const w = add(new THREE.CylinderGeometry(2.2, 2.2, 4.7, 14), wheelMat);
+      for (let i = -3; i <= 3; i++) {
+        const w = add(new THREE.CylinderGeometry(2.4, 2.4, 5.1, 14), wheelMat);
         w.rotation.x = Math.PI / 2;
-        w.position.set(i * 4.4, 2.9, z);
-        const hub = add(new THREE.CylinderGeometry(0.9, 0.9, 5, 8), trimMat);
+        w.position.set(i * 3.9, 3.1, z);
+        const hub = add(new THREE.CylinderGeometry(0.95, 0.95, 5.4, 8), trimMat);
         hub.rotation.x = Math.PI / 2;
-        hub.position.set(i * 4.4, 2.9, z);
+        hub.position.set(i * 3.9, 3.1, z);
       }
-      const fender = add(new THREE.BoxGeometry(25, 0.9, 4.6), bodyMat);
-      fender.position.set(0, 6.9, z);
+      // Seitenschürze
+      const skirt = add(this.extrude([[-12, 0], [12, 0], [12, 3.2], [-12, 3.2]], 1.8, 0.4), bodyMat);
+      skirt.position.set(1, 5.6, side * 10.7);
     }
 
-    // Wanne
-    const hull = add(
-      this.extrude([[-11, 0], [11.5, 0], [12.5, 2.4], [9.5, 5.6], [-9.5, 6.2], [-12.5, 3]], 12.5, 0.8),
-      bodyMat
-    );
-    hull.position.y = 4.4;
-    const plate = add(new THREE.BoxGeometry(8, 0.6, 9), darkMat);
-    plate.position.set(-5, 10.7, 0);
+    // Wanne mit Glacis
+    const hull = add(this.extrude([[-13, 0], [13.6, 0], [15, 3], [11.8, 6.6], [-12.5, 7.2], [-15, 4.2]], 15, 0.9), bodyMat);
+    hull.position.y = 5.4;
+    const deck = add(new THREE.BoxGeometry(11, 0.7, 11), darkMat);
+    deck.position.set(-6.5, 12.9, 0);
+    for (const sz of [-1, 1]) {
+      const hl = add(new THREE.BoxGeometry(1.1, 1.3, 2.4), lampF);
+      hl.position.set(14.6, 9, sz * 5.6);
+      const tl = add(new THREE.BoxGeometry(1, 1.4, 2.2), lampR);
+      tl.position.set(-14.8, 9.4, sz * 5.6);
+    }
 
-    // Turm + Kanone
+    // Turm (bleibt in der Schussebene, damit das Rohr exakt dem Winkel folgt)
     const turret = new THREE.Group();
-    turret.position.set(-0.5, 10.3, 0);
+    turret.position.set(-1, 12.2, 0);
     group.add(turret);
-    add(this.extrude([[-6.5, 0], [6.8, 0], [7.4, 2.4], [4.8, 5.4], [-4.6, 5.4], [-7.2, 2.6]], 11, 0.7), bodyMat, turret);
-    const hatch = add(new THREE.CylinderGeometry(1.9, 2.1, 1.1, 10), darkMat, turret);
-    hatch.position.set(-2.4, 6, 0);
-    const ant = add(new THREE.CylinderGeometry(0.12, 0.12, 12, 4), darkMat, turret);
-    ant.position.set(-5.5, 10.5, -3.5);
+    add(this.extrude([[-9.5, 0], [8, 0], [10.5, 2.4], [9.2, 5.6], [-2.5, 6.4], [-10, 4.4]], 12.5, 0.8), bodyMat, turret);
+    const cup = add(new THREE.CylinderGeometry(1.9, 2.1, 1.5, 12), darkMat, turret);
+    cup.position.set(-4.5, 7.1, 3);
+    const mg = add(new THREE.CylinderGeometry(0.22, 0.22, 3, 6), darkMat, turret);
+    mg.rotation.z = Math.PI / 2;
+    mg.position.set(-3, 8.2, 3);
+    const ant = add(new THREE.CylinderGeometry(0.12, 0.12, 16, 4), darkMat, turret);
+    ant.position.set(-8, 12, -4);
+    for (let i = 0; i < 3; i++) {
+      const sm = add(new THREE.CylinderGeometry(0.55, 0.55, 1.6, 6), darkMat, turret);
+      sm.rotation.z = Math.PI / 2;
+      sm.position.set(6, 3.8 + i * 0.01, -5.7 + i * 0.9);
+    }
 
     const gun = new THREE.Group();
-    gun.position.set(0, 2.9, 0);
+    gun.position.set(0, 3, 0);
     turret.add(gun);
-    const mantlet = add(new THREE.CylinderGeometry(3.3, 3.3, 7, 14), bodyMat, gun);
-    mantlet.rotation.x = Math.PI / 2;
-    mantlet.position.x = 4.8;
+    const mantlet = add(new THREE.BoxGeometry(4.2, 4.6, 6.6), bodyMat, gun);
+    mantlet.position.x = 9.5;
     const barrel = new THREE.Group();
     gun.add(barrel);
-    const tube = add(new THREE.CylinderGeometry(1.35, 1.65, 18, 12), darkMat, barrel);
+    const tube = add(new THREE.CylinderGeometry(1.25, 1.45, 26, 12), darkMat, barrel);
     tube.rotation.z = -Math.PI / 2;
-    tube.position.x = 13;
-    const brake = add(new THREE.CylinderGeometry(2.1, 2.1, 3.4, 12), trimMat, barrel);
+    tube.position.x = 24;
+    const sleeve = add(new THREE.CylinderGeometry(1.75, 1.75, 10, 12), bodyMat, barrel);
+    sleeve.rotation.z = -Math.PI / 2;
+    sleeve.position.x = 20;
+    const brake = add(new THREE.CylinderGeometry(1.9, 1.9, 2.6, 12), trimMat, barrel);
     brake.rotation.z = -Math.PI / 2;
-    brake.position.x = 22.3;
+    brake.position.x = 37;
 
     const shield = new THREE.Mesh(
-      new THREE.SphereGeometry(21, 24, 16),
+      new THREE.SphereGeometry(23, 24, 16),
       new THREE.MeshBasicMaterial({
         color: new THREE.Color(0.25, 1.1, 1.7), transparent: true, opacity: 0.22, depthWrite: false,
         blending: THREE.AdditiveBlending, toneMapped: false,
       })
     );
-    shield.position.y = 9;
+    shield.position.y = 11;
     shield.visible = false;
     group.add(shield);
 
-    group.scale.setScalar(1.12);
-    return { group, gun, barrel, shield, tilt: 0, recoil: 0, smokeT: 0, bodyMat };
+    group.scale.setScalar(TANK_SCALE);
+    return { group, gun, barrel, shield, tilt: 0, recoil: 0, smokeT: 0, bodyMat, body, yaw: -0.3 };
   }
 
   private syncTanks(sim: GameSimulation, dt: number): void {
@@ -783,7 +984,7 @@ export class DioramaRenderer {
         this.scene.add(vis.group);
         this.tankVisuals.set(tank.id, vis);
       }
-      if (vis.bodyMat.color.getHexString() !== new THREE.Color(tank.color).getHexString()) vis.bodyMat.color.set(tank.color);
+      
 
       vis.group.visible = tank.alive;
       if (!tank.alive) continue;
@@ -794,8 +995,11 @@ export class DioramaRenderer {
       vis.group.position.set(tank.x, tank.y, 0);
       vis.group.rotation.z = vis.tilt;
       vis.gun.rotation.z = (tank.angle * Math.PI) / 180 - vis.tilt;
+      const targetYaw = tank.angle <= 90 ? -0.32 : Math.PI + 0.32;
+      vis.yaw += (targetYaw - vis.yaw) * Math.min(1, dt * 6);
+      vis.body.rotation.y = vis.yaw;
       vis.recoil = Math.max(0, vis.recoil - dt * 4);
-      vis.barrel.position.x = -vis.recoil * 4.5;
+      vis.barrel.position.x = -vis.recoil * 6;
 
       vis.shield.visible = tank.shield > 0;
       if (vis.shield.visible) {
@@ -806,8 +1010,8 @@ export class DioramaRenderer {
         vis.smokeT -= dt;
         if (vis.smokeT <= 0) {
           vis.smokeT = tank.hp < 20 ? 0.05 : 0.11;
-          this.emitSmoke(tank.x - 3, tank.y + 17, 0, (Math.random() - 0.5) * 10, 28 + Math.random() * 14, (Math.random() - 0.5) * 6, 1.1, 7, 18, '#2c2c30', 0.7);
-          if (tank.hp < 20) this.emitFire(tank.x - 3, tank.y + 15, 0, (Math.random() - 0.5) * 6, 18, 0, 0.35, 8, 3, '#ff9a3a', '#ff3a10', 0.9);
+          this.emitSmoke(tank.x - 4, tank.y + 28, 0, (Math.random() - 0.5) * 10, 28 + Math.random() * 14, (Math.random() - 0.5) * 6, 1.1, 7, 18, '#2c2c30', 0.7);
+          if (tank.hp < 20) this.emitFire(tank.x - 4, tank.y + 25, 0, (Math.random() - 0.5) * 6, 18, 0, 0.35, 8, 3, '#ff9a3a', '#ff3a10', 0.9);
         }
       }
     }
@@ -818,8 +1022,8 @@ export class DioramaRenderer {
       if (!tank || !vis) continue;
       vis.recoil = 1;
       const a = (tank.angle * Math.PI) / 180;
-      const tx = tank.x + Math.cos(a) * 29;
-      const ty = tank.y + 15 + Math.sin(a) * 29;
+      const tx = tank.x + Math.cos(a) * 62;
+      const ty = tank.y + 28 + Math.sin(a) * 62;
       this.emitFire(tx, ty, 0, Math.cos(a) * 60, Math.sin(a) * 60, 0, 0.14, 8, 22, '#fff2c0', '#ff9a3a', 1);
       for (let i = 0; i < 5; i++) {
         this.emitSmoke(tx, ty, 0, Math.cos(a) * (30 + Math.random() * 50) + (Math.random() - 0.5) * 25, Math.sin(a) * (30 + Math.random() * 50) + 8, (Math.random() - 0.5) * 20, 0.8 + Math.random() * 0.5, 4, 14, '#bdb6ad', 0.5);
@@ -1101,9 +1305,10 @@ export class DioramaRenderer {
     this.camZoom += (targetZoom - this.camZoom) * k;
 
     const z = this.baseZ * (1 - this.camZoom);
-    const bob = Math.sin(this.elapsed * 0.35) * 1.6;
-    this.camera.position.set(this.camX, WORLD_HEIGHT * 0.5 + bob - this.camZoom * 40, z);
-    this.camera.lookAt(this.camX * 0.92 + cx * 0.08, WORLD_HEIGHT * 0.3 - this.camZoom * 30, 0);
+    const bob = Math.sin(this.elapsed * 0.35) * 1.8;
+    const sway = Math.sin(this.elapsed * 0.21) * 14;
+    this.camera.position.set(this.camX + sway - 95, 440 + bob - this.camZoom * 40, z);
+    this.camera.lookAt(this.camX * 0.92 + cx * 0.08 - 60, 175 - this.camZoom * 30, 0);
     if (this.shakeIntensity > 0.2) {
       this.camera.position.x += (Math.random() - 0.5) * this.shakeIntensity;
       this.camera.position.y += (Math.random() - 0.5) * this.shakeIntensity;
