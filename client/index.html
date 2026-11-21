@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>TankWars NextGen</title>
+  </head>
+  <body>
+    <div id="viewport">
+      <canvas id="diorama-canvas"></canvas>
+      <canvas id="retro-canvas" class="hidden"></canvas>
+      <div id="crt-overlay" class="hidden"></div>
+    </div>
+
+    <header id="top-bar">
+      <div class="pill" id="turn-info">Runde 1</div>
+      <div class="pill" id="wind-info">Wind: 0</div>
+      <div class="actions">
+        <button id="btn-mode" class="btn-secondary">Modus: Simultan</button>
+        <button id="btn-retro" class="btn-retro">📺 90s Modus</button>
+      </div>
+    </header>
+
+    <footer id="hud">
+      <div class="control-group">
+        <label>Winkel <strong id="val-angle">45°</strong></label>
+        <input type="range" id="input-angle" min="0" max="180" value="45" />
+      </div>
+
+      <div class="control-group">
+        <label>Kraft <strong id="val-power">55%</strong></label>
+        <input type="range" id="input-power" min="10" max="100" value="55" />
+      </div>
+
+      <div class="control-group">
+        <label>Waffe</label>
+        <select id="select-weapon"></select>
+      </div>
+
+      <button id="btn-fire" class="btn-fire">FEUER!</button>
+    </footer>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
