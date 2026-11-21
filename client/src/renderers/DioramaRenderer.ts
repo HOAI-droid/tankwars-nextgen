@@ -4,7 +4,6 @@ import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
-import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import {
   CHUNK_SIZE,
   ExplosionEvent,
@@ -37,7 +36,7 @@ interface TankVisual {
   baseColor: THREE.Color;
   dead: boolean;
   wreckTilt: number;
-  sprite: THREE.Mesh;
+  sprite: THREE.Object3D;
   spriteMat: THREE.MeshBasicMaterial;
   colorHex: string;
   texReady: boolean;
@@ -79,13 +78,16 @@ interface Cloud {
 }
 
 const TERRAIN_DEPTH = 210;
-const TUFTS = 2600;
-const ROCKS = 60;
-const TREES = 30;
+const GRID_X0 = -420;
+const GRID_X1 = 1420;
+const RIVER_Y = 24;
+const TUFTS = 3400;
+const ROCKS = 110;
+const TREES = 150;
 const RAIN = 900;
-const MISTS = 14;
+const MISTS = 7;
 const TANK_SCALE = 1.5;
-const PIVOT_X = 10.9;
+const PIVOT_X = 14.7;
 const PIVOT_Y = 25.4;
 const BARREL_LEN = 38;
 const MAX_DEBRIS = 260;
@@ -265,10 +267,16 @@ export class DioramaRenderer {
   private camera: THREE.PerspectiveCamera;
   private sun!: THREE.DirectionalLight;
 
-  private chunkMeshes = new Map<number, THREE.Group>();
-  private ext = new Map<number, THREE.Group>();
-  private faceMat!: THREE.MeshStandardMaterial;
-  private topMat!: THREE.MeshStandardMaterial;
+  private pmrem!: THREE.PMREMGenerator;
+  private terrainMesh!: THREE.Mesh;
+  private terrainGeo!: THREE.BufferGeometry;
+  private gridXs: number[] = [];
+  private gridZs: number[] = [];
+  private baseH = new Float32Array(WORLD_WIDTH + 1);
+  private smoothH = new Float32Array(WORLD_WIDTH + 1);
+  private baseReady = false;
+  private terrainDirtyFlag = true;
+  private waterUniform = { value: 0 };
   private tufts!: THREE.InstancedMesh;
   private rocks!: THREE.InstancedMesh;
   private trees!: THREE.InstancedMesh;
@@ -337,11 +345,9 @@ export class DioramaRenderer {
     this.scene = new THREE.Scene();
     this.scene.fog = new THREE.Fog('#6b7783', 800, 2800);
 
-    const pmrem = new THREE.PMREMGenerator(this.renderer);
-    this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
-    this.scene.environmentIntensity = 0.5;
+    this.pmrem = new THREE.PMREMGenerator(this.renderer);
 
-    this.camera = new THREE.PerspectiveCamera(38, window.innerWidth / window.innerHeight, 10, 9000);
+    this.camera = new THREE.PerspectiveCamera(46, window.innerWidth / window.innerHeight, 10, 9000);
 
     const rt = new THREE.WebGLRenderTarget(window.innerWidth, window.innerHeight, {
       type: THREE.HalfFloatType,
@@ -357,6 +363,10 @@ export class DioramaRenderer {
     this.composer.addPass(new OutputPass());
 
     this.setupSky();
+    const envScene = new THREE.Scene();
+    envScene.add(new THREE.Mesh(new THREE.SphereGeometry(100, 48, 24), this.skyMat));
+    this.scene.environment = this.pmrem.fromScene(envScene, 0.02).texture;
+    this.scene.environmentIntensity = 1.15;
     this.setupLights();
     this.setupStage();
     this.setupFoliage();
@@ -502,6 +512,7 @@ export class DioramaRenderer {
     this.rubble.length = 0;
     this.rubbleMesh.count = 0;
     this.burners.length = 0;
+    this.baseReady = false;
   }
 
   private loadTex(path: string, rx = 1, ry = 1, srgb = true): THREE.Texture {
@@ -535,16 +546,16 @@ export class DioramaRenderer {
     this.scene.add(new THREE.HemisphereLight('#b7c6da', '#3a4634', 1.5));
 
     const sun = new THREE.DirectionalLight('#ffe0b8', 3.6);
-    sun.position.set(WORLD_WIDTH / 2 + 620, 620, 520);
+    sun.position.set(WORLD_WIDTH / 2 + 760, 720, 640);
     sun.target.position.set(WORLD_WIDTH / 2, 120, 0);
     sun.castShadow = true;
-    sun.shadow.mapSize.set(2048, 2048);
-    sun.shadow.camera.left = -780;
-    sun.shadow.camera.right = 780;
-    sun.shadow.camera.top = 520;
-    sun.shadow.camera.bottom = -380;
+    sun.shadow.mapSize.set(4096, 4096);
+    sun.shadow.camera.left = -960;
+    sun.shadow.camera.right = 960;
+    sun.shadow.camera.top = 560;
+    sun.shadow.camera.bottom = -460;
     sun.shadow.camera.near = 50;
-    sun.shadow.camera.far = 2000;
+    sun.shadow.camera.far = 2800;
     sun.shadow.bias = -0.0005;
     sun.shadow.normalBias = 0.8;
     this.scene.add(sun, sun.target);
@@ -561,23 +572,166 @@ export class DioramaRenderer {
     this.scene.add(fill, fill.target);
   }
 
-  private setupStage(): void {
-    // Materialien mit Foto-Texturen aus dem Konzeptbild
-    const dirt = this.loadTex('dirt.jpg');
-    const grass = this.loadTex('grass.jpg');
-    this.faceMat = new THREE.MeshStandardMaterial({ map: dirt, bumpMap: dirt, bumpScale: 3.2, vertexColors: true, roughness: 0.96, metalness: 0 });
-    this.topMat = new THREE.MeshStandardMaterial({ map: grass, bumpMap: grass, bumpScale: 2.4, vertexColors: true, roughness: 0.95, metalness: 0 });
+  private makeTerrainMaterial(): THREE.MeshStandardMaterial {
+    const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9, metalness: 0 });
+    const g = this.loadTex('grass.jpg');
+    const r = this.loadTex('dirt.jpg');
+    mat.onBeforeCompile = (sh) => {
+      sh.uniforms.gMap = { value: g };
+      sh.uniforms.rMap = { value: r };
+      sh.vertexShader = sh.vertexShader
+        .replace('#include <common>', '#include <common>\nvarying vec3 vWPos;\nvarying vec3 vWNor;')
+        .replace('#include <begin_vertex>', '#include <begin_vertex>\nvWPos = (modelMatrix * vec4(position, 1.0)).xyz;\nvWNor = normalize(mat3(modelMatrix) * normal);');
+      sh.fragmentShader = sh.fragmentShader
+        .replace(
+          '#include <common>',
+          `#include <common>
+          varying vec3 vWPos;
+          varying vec3 vWNor;
+          uniform sampler2D gMap;
+          uniform sampler2D rMap;
+          float h21(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+          float n21(vec2 p) { vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+            return mix(mix(h21(i), h21(i + vec2(1, 0)), f.x), mix(h21(i + vec2(0, 1)), h21(i + vec2(1, 1)), f.x), f.y); }
+          vec3 tri(sampler2D t, vec3 p, vec3 w, float s) {
+            return texture2D(t, p.zy / s).rgb * w.x + texture2D(t, p.xz / s).rgb * w.y + texture2D(t, p.xy / s).rgb * w.z;
+          }`
+        )
+        .replace(
+          '#include <map_fragment>',
+          `vec3 nn = normalize(vWNor);
+           vec3 w = pow(abs(nn), vec3(4.0)); w /= (w.x + w.y + w.z);
+           float slope = 1.0 - nn.y;
+           float nz = n21(vWPos.xz * 0.018) * 0.55 + n21(vWPos.xz * 0.06) * 0.3 + n21(vWPos.xz * 0.2) * 0.15;
+           float rock = smoothstep(0.16, 0.4, slope + (nz - 0.5) * 0.28);
+           vec3 gc = tri(gMap, vWPos, w, 230.0);
+           vec3 gc2 = tri(gMap, vWPos * 1.7 + 41.0, w, 230.0);
+           gc = mix(gc, gc2, smoothstep(0.35, 0.65, nz)) * 1.15;
+           vec3 rc = tri(rMap, vWPos, w, 210.0) * 1.2;
+           vec3 moss = mix(rc, rc * vec3(0.5, 0.9, 0.38) * 1.35, smoothstep(0.5, 0.85, nz) * 0.75 * (1.0 - smoothstep(0.45, 0.75, slope)));
+           vec3 col = mix(gc, moss, rock);
+           float mud = 1.0 - smoothstep(24.0, 46.0, vWPos.y);
+           col = mix(col, col * vec3(0.5, 0.46, 0.42), mud * 0.85);
+           diffuseColor.rgb *= col;`
+        );
+    };
+    return mat;
+  }
 
-    // Painted Backdrop: Berge, Wald und Nebel aus dem Konzeptbild
+  private setupStage(): void {
+    // Foto-Backdrop (Berge/Wald/Nebel aus dem Konzeptbild)
     const bd = this.loadTex('backdrop.webp');
     bd.wrapS = bd.wrapT = THREE.ClampToEdgeWrapping;
-    const plate = new THREE.Mesh(
-      new THREE.PlaneGeometry(2300, 2300 * (580 / 1600)),
-      new THREE.MeshBasicMaterial({ map: bd, transparent: true, depthWrite: false, fog: false, color: '#dfe5ee' })
-    );
-    plate.position.set(WORLD_WIDTH / 2, 40 + (2300 * (580 / 1600)) / 2, -760);
+    const bw = 2500, bh = bw * (580 / 1600);
+    const plate = new THREE.Mesh(new THREE.PlaneGeometry(bw, bh), new THREE.MeshBasicMaterial({ map: bd, transparent: true, depthWrite: false, fog: false, color: '#dfe5ee' }));
+    plate.position.set(WORLD_WIDTH / 2, 60 + bh / 2, -820);
     plate.renderOrder = -5;
     this.scene.add(plate);
+
+    // Gelände als echtes 3D-Gitter (Tal mit Hügeln, Wald und Fluss)
+    this.gridXs = [];
+    for (let x = GRID_X0; x <= GRID_X1; x += 5) this.gridXs.push(x);
+    this.gridZs = [-520, -400, -300, -220, -160, -120, -90, -66, -48, -34, -22, -12, -5, 0, 5, 12, 22, 34, 48, 64, 82, 100, 118, 136, 152, 166, 180, 195, 205, 218, 240, 290, 370, 470];
+    const nx = this.gridXs.length, nz = this.gridZs.length;
+    const pos = new Float32Array(nx * nz * 3);
+    const col = new Float32Array(nx * nz * 3).fill(1);
+    const idx: number[] = [];
+    for (let j = 0; j < nz - 1; j++) {
+      for (let i = 0; i < nx - 1; i++) {
+        const a = j * nx + i, b = a + 1, c = a + nx, d = c + 1;
+        idx.push(a, c, b, b, c, d);
+      }
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    geo.setIndex(idx);
+    this.terrainGeo = geo;
+    this.terrainMesh = new THREE.Mesh(geo, this.makeTerrainMaterial());
+    this.terrainMesh.castShadow = true;
+    this.terrainMesh.receiveShadow = true;
+    this.terrainMesh.frustumCulled = false;
+    this.scene.add(this.terrainMesh);
+
+    // Fluss mit fließender Oberfläche und Schaum
+    const wmat = new THREE.MeshStandardMaterial({ color: '#4a6272', roughness: 0.12, metalness: 0.1, envMapIntensity: 3.2, transparent: true, opacity: 0.92 });
+    const wu = this.waterUniform;
+    wmat.onBeforeCompile = (sh) => {
+      sh.uniforms.uTime = wu;
+      sh.vertexShader = sh.vertexShader
+        .replace('#include <common>', '#include <common>\nvarying vec3 vWPos;')
+        .replace('#include <begin_vertex>', '#include <begin_vertex>\nvWPos = (modelMatrix * vec4(position, 1.0)).xyz;');
+      sh.fragmentShader = sh.fragmentShader
+        .replace('#include <common>', `#include <common>
+          varying vec3 vWPos;
+          uniform float uTime;
+          float h21(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+          float n21(vec2 p) { vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+            return mix(mix(h21(i), h21(i + vec2(1, 0)), f.x), mix(h21(i + vec2(0, 1)), h21(i + vec2(1, 1)), f.x), f.y); }`)
+        .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+          vec2 q = vWPos.xz * vec2(0.05, 0.11) + vec2(uTime * 0.55, 0.0);
+          float r1 = n21(q * 3.0 + vec2(uTime * 0.7, 0.0));
+          float r2 = n21(q * 7.0 - vec2(uTime * 1.3, 0.0));
+          normal = normalize(normal + vec3(r1 - 0.5, 0.0, r2 - 0.5) * 0.42);`)
+        .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+          float foam = smoothstep(0.74, 0.92, n21(q * 5.0 + vec2(uTime * 1.1, 3.0))) * smoothstep(0.35, 0.8, n21(q * 1.7));
+          totalEmissiveRadiance += vec3(0.75, 0.82, 0.88) * foam * 0.55;`);
+    };
+    const water = new THREE.Mesh(new THREE.PlaneGeometry(GRID_X1 - GRID_X0, 150), wmat);
+    water.rotation.x = -Math.PI / 2;
+    water.position.set((GRID_X0 + GRID_X1) / 2, RIVER_Y + 3, 138);
+    water.receiveShadow = true;
+    this.scene.add(water);
+  }
+
+  /** Höhe der Landschaft an (x,z): Spielfeld bei z=0, dahinter Hügel/Wald, davor Fluss und Ufer. */
+  private heightAt(x: number, z: number): number {
+    const W = WORLD_WIDTH;
+    const xc = Math.max(0, Math.min(W - 1, x));
+    const xi = Math.min(W - 2, Math.floor(xc));
+    const fx = xc - xi;
+    const t = this.terrainRef;
+    const dyn = t ? t.heights[xi] * (1 - fx) + t.heights[xi + 1] * fx : 0;
+    const hs = this.baseH[xi] * (1 - fx) + this.baseH[xi + 1] * fx;
+    const sm = this.smoothH[xi];
+    const xs = x < 0 ? -x : x > W ? x - W : 0;
+    const side = Math.pow(xs / 220, 1.5) * 150;
+    const ss = (a: number, b: number, v: number) => { const k = Math.max(0, Math.min(1, (v - a) / (b - a))); return k * k * (3 - 2 * k); };
+    const hill = 0.5 + 0.25 * Math.sin(x * 0.009 + z * 0.013) + 0.2 * Math.sin(x * 0.021 - z * 0.01 + 1.3) + 0.1 * Math.sin(x * 0.047 + z * 0.03);
+    let S: number;
+    if (z < 0) {
+      const tb = ss(8, 170, -z);
+      const target = sm * 0.3 + 14 + hill * (30 + 0.1 * -z) + (z < -260 ? (-z - 260) * 0.45 : 0);
+      S = hs + (target - hs) * tb;
+    } else {
+      const tf = ss(34, 105, z);
+      const bank = z > 212 ? Math.min(60, (z - 212) * 1.3) + (z > 260 ? 8 * Math.sin(x * 0.02 + z * 0.05) : 0) : 0;
+      const riverbed = RIVER_Y - 4 + 5 * Math.sin(x * 0.03 + z * 0.1) + bank;
+      S = hs + (riverbed - hs) * tf;
+    }
+    const d = (dyn - hs) * Math.exp(-Math.pow(z / 62, 2));
+    return S + d + side;
+  }
+
+  private updateTerrainGrid(): void {
+    const pos = this.terrainGeo.getAttribute('position') as THREE.BufferAttribute;
+    const col = this.terrainGeo.getAttribute('color') as THREE.BufferAttribute;
+    const nx = this.gridXs.length, nz = this.gridZs.length;
+    for (let j = 0; j < nz; j++) {
+      const z = this.gridZs[j];
+      const zf = Math.exp(-Math.pow(z / 75, 2));
+      for (let i = 0; i < nx; i++) {
+        const x = this.gridXs[i];
+        const k = j * nx + i;
+        pos.setXYZ(k, x, this.heightAt(x, z), z);
+        const sc = this.scorch[Math.max(0, Math.min(WORLD_WIDTH, Math.round(x)))] * zf;
+        const b = 1 - 0.78 * Math.min(1, sc);
+        col.setXYZ(k, b, b, b);
+      }
+    }
+    pos.needsUpdate = true;
+    col.needsUpdate = true;
+    this.terrainGeo.computeVertexNormals();
   }
 
   private setupFoliage(): void {
@@ -623,8 +777,7 @@ export class DioramaRenderer {
     this.scene.add(this.tufts);
     for (let i = 0; i < TUFTS; i++) {
       // vorne dichter als hinten
-      const f = Math.pow(Math.random(), 0.7);
-      this.foliageSeed.push({ x: Math.random() * WORLD_WIDTH, z: -hd + 5 + f * (TERRAIN_DEPTH - 12), s: 4 + Math.random() * 6, r: Math.random() * 6.28 });
+      this.foliageSeed.push({ x: -80 + Math.random() * (WORLD_WIDTH + 160), z: -150 + Math.random() * 330, s: 4 + Math.random() * 6, r: Math.random() * 6.28 });
     }
 
     // Felsbrocken
@@ -639,7 +792,7 @@ export class DioramaRenderer {
     this.rocks.frustumCulled = false;
     this.scene.add(this.rocks);
     for (let i = 0; i < ROCKS; i++) {
-      this.rockSeed.push({ x: Math.random() * WORLD_WIDTH, z: -hd + 8 + Math.random() * (TERRAIN_DEPTH - 20), s: 2.5 + Math.pow(Math.random(), 2) * 9, r: Math.random() * 6.28 });
+      this.rockSeed.push({ x: -100 + Math.random() * (WORLD_WIDTH + 200), z: -260 + Math.random() * 450, s: 3 + Math.pow(Math.random(), 2) * 16, r: Math.random() * 6.28 });
     }
 
     // Tannen im Hintergrund
@@ -649,7 +802,7 @@ export class DioramaRenderer {
     this.trees.frustumCulled = false;
     this.scene.add(this.trees);
     for (let i = 0; i < TREES; i++) {
-      this.treeSeed.push({ x: Math.random() * WORLD_WIDTH, z: -hd + 6 + Math.random() * (hd * 0.8), s: 11 + Math.random() * 14 });
+      this.treeSeed.push({ x: -200 + Math.random() * (WORLD_WIDTH + 400), z: -480 + Math.random() * 350, s: 14 + Math.random() * 22 });
     }
   }
 
@@ -689,21 +842,23 @@ export class DioramaRenderer {
     return out;
   }
 
-  private syncFoliage(sim: GameSimulation): void {
-    const t = sim.terrain;
+  private syncFoliage(_sim: GameSimulation): void {
     const m = this.dummy;
+    const sc = (x: number) => this.scorch[Math.max(0, Math.min(WORLD_WIDTH, Math.floor(x)))];
     this.foliageSeed.forEach((f, i) => {
-      const h = t.getHeight(f.x);
+      const h = this.heightAt(f.x, f.z);
+      const wet = h < RIVER_Y + 10;
+      const burnt = sc(f.x) > 0.4 && Math.abs(f.z) < 70;
+      const fern = f.z > 120 ? 2.6 : 1;
       m.position.set(f.x, h - 0.5, f.z);
       m.rotation.set(0, f.r, 0);
-      const burnt = this.scorch[Math.max(0, Math.min(WORLD_WIDTH, Math.floor(f.x)))] > 0.4;
-      m.scale.set(f.s * 0.55, f.s * (h < 14 || burnt ? 0.01 : 1), f.s * 0.55);
+      m.scale.set(f.s * 0.55 * fern, f.s * (wet || burnt ? 0.01 : 1) * fern, f.s * 0.55 * fern);
       m.updateMatrix();
       this.tufts.setMatrixAt(i, m.matrix);
     });
     this.tufts.instanceMatrix.needsUpdate = true;
     this.rockSeed.forEach((r, i) => {
-      const h = t.getHeight(r.x);
+      const h = this.heightAt(r.x, r.z);
       m.position.set(r.x, h + r.s * 0.2, r.z);
       m.rotation.set(r.r, r.r * 1.7, r.r * 0.3);
       m.scale.set(r.s, r.s * 0.65, r.s * 0.85);
@@ -712,7 +867,7 @@ export class DioramaRenderer {
     });
     this.rocks.instanceMatrix.needsUpdate = true;
     this.rubble.forEach((r, i) => {
-      const h = t.getHeight(r.x);
+      const h = this.heightAt(r.x, r.z);
       m.position.set(r.x, h + r.s * 0.15, r.z);
       m.rotation.set(r.r, r.r * 2.1, r.r * 0.6);
       m.scale.set(r.s, r.s * 0.7, r.s * 0.9);
@@ -722,10 +877,10 @@ export class DioramaRenderer {
     this.rubbleMesh.count = this.rubble.length;
     this.rubbleMesh.instanceMatrix.needsUpdate = true;
     this.treeSeed.forEach((tr, i) => {
-      const h = t.getHeight(tr.x);
+      const h = this.heightAt(tr.x, tr.z);
+      const tb = (sc(tr.x) > 0.35 && Math.abs(tr.z) < 70) || h < RIVER_Y + 12 ? 0.01 : 0.5;
       m.position.set(tr.x, h - 1, tr.z);
       m.rotation.set(0, tr.x, 0);
-      const tb = this.scorch[Math.max(0, Math.min(WORLD_WIDTH, Math.floor(tr.x)))] > 0.35 ? 0.01 : 0.5;
       m.scale.set(tr.s * tb, tr.s * tb, tr.s * tb);
       m.updateMatrix();
       this.trees.setMatrixAt(i, m.matrix);
@@ -748,8 +903,8 @@ export class DioramaRenderer {
 
     // Nebelbänke im Tal
     for (let i = 0; i < MISTS; i++) {
-      const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.glowTex, color: '#a9b6c2', transparent: true, opacity: 0.16, depthWrite: false, fog: false }));
-      sp.position.set(Math.random() * WORLD_WIDTH, 60 + Math.random() * 190, -130 - Math.random() * 120);
+      const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.glowTex, color: '#a9b6c2', transparent: true, opacity: 0.07, depthWrite: false, fog: false }));
+      sp.position.set(Math.random() * WORLD_WIDTH, 40 + Math.random() * 200, -300 + Math.random() * 520);
       const s = 330 + Math.random() * 320;
       sp.scale.set(s * 1.8, s * 0.55, 1);
       this.scene.add(sp);
@@ -762,6 +917,7 @@ export class DioramaRenderer {
   private updateAtmosphere(wind: number, dt: number): void {
     this.elapsed += dt;
     this.swayUniform.value = this.elapsed;
+    this.waterUniform.value = this.elapsed;
     this.skyMat.uniforms.time.value = this.elapsed;
     const arr = this.rain.geometry.getAttribute('position') as THREE.BufferAttribute;
     const slant = wind * 1.8 + 40;
@@ -799,7 +955,7 @@ export class DioramaRenderer {
     this.composer.setSize(w, h);
     this.bloomPass.setSize(w, h);
     this.camera.aspect = w / h;
-    this.baseZ = 1060 * Math.max(1, 1.45 / this.camera.aspect);
+    this.baseZ = 800 * Math.max(1, 1.45 / this.camera.aspect);
     this.camera.updateProjectionMatrix();
   }
 
@@ -815,140 +971,35 @@ export class DioramaRenderer {
   /* ----------------------------- Terrain --------------------------- */
 
   private syncTerrain(sim: GameSimulation): void {
-    for (const c of this.scorchDirty) sim.terrain.dirtyChunks.add(c);
-    this.scorchDirty.clear();
-    if (sim.terrain.dirtyChunks.size === 0) return;
-    for (const chunkIdx of sim.terrain.dirtyChunks) {
-      const old = this.chunkMeshes.get(chunkIdx);
-      if (old) {
-        this.scene.remove(old);
-        old.children.forEach((c) => (c as THREE.Mesh).geometry.dispose());
-      }
-      const g = this.buildChunkMesh(sim, chunkIdx);
-      this.scene.add(g);
-      this.chunkMeshes.set(chunkIdx, g);
+    if (!this.baseReady) {
+      this.baseH.set(sim.terrain.heights);
+      this.baseH[WORLD_WIDTH] = sim.terrain.heights[WORLD_WIDTH - 1];
+      this.computeSmooth();
+      this.baseReady = true;
+      this.terrainDirtyFlag = true;
     }
-    sim.terrain.dirtyChunks.clear();
+    if (sim.terrain.dirtyChunks.size > 0 || this.scorchDirty.size > 0) {
+      this.terrainDirtyFlag = true;
+      sim.terrain.dirtyChunks.clear();
+      this.scorchDirty.clear();
+    }
+    if (!this.terrainDirtyFlag) return;
+    this.terrainDirtyFlag = false;
+    this.updateTerrainGrid();
     this.syncFoliage(sim);
-    for (const side of [-1, 1] as const) {
-      const old = this.ext.get(side);
-      if (old) {
-        this.scene.remove(old);
-        old.children.forEach((c) => (c as THREE.Mesh).geometry.dispose());
+  }
+
+  private computeSmooth(): void {
+    const W = WORLD_WIDTH;
+    for (let i = 0; i <= W; i++) {
+      let s = 0, n = 0;
+      for (let k = -22; k <= 22; k += 2) {
+        const j = Math.max(0, Math.min(W, i + k));
+        s += this.baseH[j];
+        n++;
       }
-      const g = this.buildExtension(sim, side);
-      this.scene.add(g);
-      this.ext.set(side, g);
+      this.smoothH[i] = s / n;
     }
-  }
-
-  private buildChunkMesh(sim: GameSimulation, chunkIdx: number): THREE.Group {
-    const t = sim.terrain;
-    const startX = chunkIdx * CHUNK_SIZE;
-    const endX = Math.min(t.width - 1, startX + CHUNK_SIZE);
-    return this.buildSpan((x) => t.getHeight(x), startX, endX);
-  }
-
-  /** Spiegelt das Gelände über die Ränder hinaus und lässt es zu Talwänden ansteigen. */
-  private buildExtension(sim: GameSimulation, side: -1 | 1): THREE.Group {
-    const t = sim.terrain;
-    const W = t.width - 1;
-    const hf = (x: number) => {
-      const d = side < 0 ? -x : x - W;
-      const mx = side < 0 ? Math.min(W, d) : Math.max(0, W - d);
-      return t.getHeight(mx) + Math.pow(Math.max(0, d - 10) / 55, 1.5) * 38;
-    };
-    return side < 0 ? this.buildSpan(hf, -360, 0) : this.buildSpan(hf, W, W + 360);
-  }
-
-  private buildSpan(hf: (x: number) => number, startX: number, endX: number): THREE.Group {
-    const hd = TERRAIN_DEPTH / 2;
-    const LIP = 14;
-
-    const mk = () => ({ pos: [] as number[], nor: [] as number[], col: [] as number[], uv: [] as number[] });
-    const top = mk();
-    const face = mk();
-    let burn = 1;
-    const vert = (g: ReturnType<typeof mk>, x: number, y: number, z: number, n: [number, number, number], u: number, v: number, shade: number) => {
-      shade *= burn;
-      g.pos.push(x, y, z);
-      g.nor.push(n[0], n[1], n[2]);
-      g.uv.push(u, v);
-      g.col.push(shade, shade, shade);
-    };
-
-    const step = 2;
-    for (let x = startX; x < endX; x += step) {
-      const nx = Math.min(endX, x + step);
-      const h1 = hf(x);
-      const h2 = hf(nx);
-      const j = 0.88 + hash(x * 0.5) * 0.24;
-      const sci = Math.max(0, Math.min(WORLD_WIDTH, Math.floor(x)));
-      burn = 1 - 0.74 * Math.min(1, this.scorch[sci] ?? 0);
-      const slope = (a: number) => {
-        const dh = (hf(a + 2) - hf(a - 2)) / 4;
-        const l = Math.hypot(dh, 1);
-        return [-dh / l, 1 / l, 0] as [number, number, number];
-      };
-      const nA = slope(x);
-      const nB = slope(nx);
-      const S = 260; // Texturmaßstab
-
-      // Oberfläche: breites Tal (z = -hd … +hd), nach hinten leicht abgedunkelt (Dunst)
-      const zs = [-hd, -hd * 0.35, hd];
-      const sh = [0.55, 0.9, 1.0];
-      for (let k = 0; k < 2; k++) {
-        const za = zs[k], zb = zs[k + 1];
-        const sa = sh[k] * j, sb = sh[k + 1] * j;
-        vert(top, x, h1, zb, nA, x / S, zb / S, sb);
-        vert(top, nx, h2, zb, nB, nx / S, zb / S, sb);
-        vert(top, nx, h2, za, nB, nx / S, za / S, sa);
-        vert(top, x, h1, zb, nA, x / S, zb / S, sb);
-        vert(top, nx, h2, za, nB, nx / S, za / S, sa);
-        vert(top, x, h1, za, nA, x / S, za / S, sa);
-      }
-
-      // Grasnarbe an der Vorderkante (Teil des Gras-Meshes)
-      const nF: [number, number, number] = [0, 0, 1];
-      const l1 = h1 - LIP, l2 = h2 - LIP;
-      vert(top, x, l1, hd, nF, x / S, 0.0, 0.5 * j);
-      vert(top, nx, l2, hd, nF, nx / S, 0.0, 0.5 * j);
-      vert(top, nx, h2, hd, nF, nx / S, 0.1, 0.95 * j);
-      vert(top, x, l1, hd, nF, x / S, 0.0, 0.5 * j);
-      vert(top, nx, h2, hd, nF, nx / S, 0.1, 0.95 * j);
-      vert(top, x, h1, hd, nF, x / S, 0.1, 0.95 * j);
-
-      // Erd-/Felsschnitt vorne, nach unten ins Dunkel
-      const lv1 = [l1, l1 * 0.5, 0, -420];
-      const lv2 = [l2, l2 * 0.5, 0, -420];
-      const sd = [0.95, 0.8, 0.55, 0.08];
-      const D = 320;
-      for (let r = 0; r < 3; r++) {
-        const sa = sd[r] * j, sb = sd[r + 1] * j;
-        vert(face, x, lv1[r + 1], hd, nF, x / D, lv1[r + 1] / D, sb);
-        vert(face, nx, lv2[r + 1], hd, nF, nx / D, lv2[r + 1] / D, sb);
-        vert(face, nx, lv2[r], hd, nF, nx / D, lv2[r] / D, sa);
-        vert(face, x, lv1[r + 1], hd, nF, x / D, lv1[r + 1] / D, sb);
-        vert(face, nx, lv2[r], hd, nF, nx / D, lv2[r] / D, sa);
-        vert(face, x, lv1[r], hd, nF, x / D, lv1[r] / D, sa);
-      }
-    }
-
-    const group = new THREE.Group();
-    const build = (g: ReturnType<typeof mk>, mat: THREE.Material) => {
-      const geo = new THREE.BufferGeometry();
-      geo.setAttribute('position', new THREE.Float32BufferAttribute(g.pos, 3));
-      geo.setAttribute('normal', new THREE.Float32BufferAttribute(g.nor, 3));
-      geo.setAttribute('color', new THREE.Float32BufferAttribute(g.col, 3));
-      geo.setAttribute('uv', new THREE.Float32BufferAttribute(g.uv, 2));
-      const mesh = new THREE.Mesh(geo, mat);
-      mesh.castShadow = true;
-      mesh.receiveShadow = true;
-      group.add(mesh);
-    };
-    build(top, this.topMat);
-    build(face, this.faceMat);
-    return group;
   }
 
   /* ----------------------------- Panzer ---------------------------- */
@@ -956,133 +1007,225 @@ export class DioramaRenderer {
   private extrude(profile: Array<[number, number]>, depth: number, bevel = 0.7): THREE.BufferGeometry {
     const shape = new THREE.Shape(profile.map(([x, y]) => new THREE.Vector2(x, y)));
     const g = new THREE.ExtrudeGeometry(shape, {
-      depth: depth - bevel * 2, bevelEnabled: true, bevelThickness: bevel, bevelSize: bevel, bevelSegments: 2, curveSegments: 4,
+      depth: depth - bevel * 2, bevelEnabled: true, bevelThickness: bevel, bevelSize: bevel, bevelSegments: 4, curveSegments: 6,
     });
     g.translate(0, 0, -(depth - bevel * 2) / 2);
     return g;
   }
 
-  private tankImg: HTMLImageElement | null = null;
-  private tankTex = new Map<string, THREE.CanvasTexture>();
-  private shadowTex: THREE.CanvasTexture | null = null;
+  private tankImgRequested = true;
+  private gnomeTex: THREE.CanvasTexture | null = null;
 
-  private loadTankImage(): void {
-    const img = new Image();
-    img.onload = () => (this.tankImg = img);
-    img.src = import.meta.env.BASE_URL + 'tex/tank.png';
-  }
-
-  /** Das Foto-Panzer-Sprite wird pro Team umgefärbt (Rot -> Teamfarbe). */
-  private teamTexture(colorHex: string): THREE.CanvasTexture | null {
-    if (!this.tankImg) return null;
-    const cached = this.tankTex.get(colorHex);
-    if (cached) return cached;
-    const img = this.tankImg;
+  /** Lack-Textur mit Schmutz, Kratzern und Paneelfugen (macht die Panzer plastisch). */
+  private grimeTexture(): THREE.CanvasTexture {
+    if (this.gnomeTex) return this.gnomeTex;
     const c = document.createElement('canvas');
-    c.width = img.width;
-    c.height = img.height;
-    const g = c.getContext('2d', { willReadFrequently: true })!;
-    g.drawImage(img, 0, 0);
-    const data = g.getImageData(0, 0, c.width, c.height);
-    const d = data.data;
-    const tc = new THREE.Color(colorHex);
-    const hsl = { h: 0, s: 0, l: 0 };
-    tc.getHSL(hsl);
-    const desat = hsl.s < 0.2;
-    for (let i = 0; i < d.length; i += 4) {
-      const r = d[i] / 255, gg = d[i + 1] / 255, b = d[i + 2] / 255;
-      const mx = Math.max(r, gg, b), mn = Math.min(r, gg, b);
-      const v = mx, sat = mx === 0 ? 0 : (mx - mn) / mx;
-      if (sat < 0.28 || r < gg * 1.1 || r < b * 1.1) continue; // nur rote Lackfläche umfärben
-      const q = new THREE.Color();
-      q.setHSL(hsl.h, desat ? 0.04 : Math.min(1, hsl.s * 0.95), Math.min(0.9, v * (desat ? 1.15 : 0.62) + 0.02));
-      const k = Math.min(1, (sat - 0.28) * 3.5);
-      d[i] = (d[i] * (1 - k) + q.r * 255 * k) | 0;
-      d[i + 1] = (d[i + 1] * (1 - k) + q.g * 255 * k) | 0;
-      d[i + 2] = (d[i + 2] * (1 - k) + q.b * 255 * k) | 0;
+    c.width = c.height = 256;
+    const g = c.getContext('2d')!;
+    g.fillStyle = '#d8d8d8';
+    g.fillRect(0, 0, 256, 256);
+    for (let i = 0; i < 520; i++) {
+      const x = Math.random() * 256, y = Math.random() * 256, r = 2 + Math.random() * 16;
+      const gr = g.createRadialGradient(x, y, 0, x, y, r);
+      const a = Math.random() * 0.22;
+      gr.addColorStop(0, `rgba(${Math.random() < 0.5 ? '40,34,28' : '255,255,255'},${a})`);
+      gr.addColorStop(1, 'rgba(0,0,0,0)');
+      g.fillStyle = gr;
+      g.fillRect(x - r, y - r, r * 2, r * 2);
     }
-    g.putImageData(data, 0, 0);
+    g.strokeStyle = 'rgba(255,255,255,0.18)';
+    for (let i = 0; i < 160; i++) {
+      const x = Math.random() * 256, y = Math.random() * 256;
+      g.beginPath(); g.moveTo(x, y); g.lineTo(x + (Math.random() - 0.5) * 24, y + (Math.random() - 0.5) * 10); g.stroke();
+    }
+    // Schlamm unten
+    const mud = g.createLinearGradient(0, 170, 0, 256);
+    mud.addColorStop(0, 'rgba(60,45,30,0)');
+    mud.addColorStop(1, 'rgba(60,45,30,0.55)');
+    g.fillStyle = mud;
+    g.fillRect(0, 170, 256, 86);
     const t = new THREE.CanvasTexture(c);
+    t.wrapS = t.wrapT = THREE.RepeatWrapping;
     t.colorSpace = THREE.SRGBColorSpace;
     t.anisotropy = 8;
-    this.tankTex.set(colorHex, t);
+    this.gnomeTex = t;
     return t;
   }
 
   private createTankVisual(colorHex: string): TankVisual {
-    if (!this.tankImg && !this.tankImgRequested) {
-      this.tankImgRequested = true;
-      this.loadTankImage();
-    }
     const group = new THREE.Group();
     const body = new THREE.Group();
+    body.scale.setScalar(1.7);
     group.add(body);
-    const paint = new THREE.Color(colorHex).multiplyScalar(0.45);
-    const bodyMat = new THREE.MeshStandardMaterial({ color: paint, roughness: 0.42, metalness: 0.4, envMapIntensity: 0.7 });
-    const darkMat = new THREE.MeshStandardMaterial({ color: '#1d2128', roughness: 0.5, metalness: 0.7 });
+    const grime = this.grimeTexture();
+    const bodyMat = new THREE.MeshStandardMaterial({ color: new THREE.Color(colorHex).multiplyScalar(0.8), map: grime, bumpMap: grime, bumpScale: 0.6, roughness: 0.42, metalness: 0.45, envMapIntensity: 1.3 });
+    const darkMat = new THREE.MeshStandardMaterial({ color: '#1a1d23', map: grime, roughness: 0.55, metalness: 0.75, envMapIntensity: 1.1 });
+    const rubber = new THREE.MeshStandardMaterial({ color: '#15171a', roughness: 0.95, metalness: 0.05, map: grime });
+    const wheelMat = new THREE.MeshStandardMaterial({ color: '#2a3038', roughness: 0.5, metalness: 0.75, envMapIntensity: 1.2 });
+    const trimMat = new THREE.MeshStandardMaterial({ color: '#b3bac6', roughness: 0.28, metalness: 0.95, envMapIntensity: 1.5 });
+    const lampF = new THREE.MeshStandardMaterial({ color: '#fff3c9', emissive: '#ffd98a', emissiveIntensity: 3 });
+    const lampR = new THREE.MeshStandardMaterial({ color: '#ff3b30', emissive: '#ff2a1d', emissiveIntensity: 3.6 });
 
-    // Foto-Panzer als Sprite
-    const W = 72, H = W * (270 / 603);
-    const spriteMat = new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false, fog: false, color: '#ffffff', opacity: 0 });
-    const sprite = new THREE.Mesh(new THREE.PlaneGeometry(W, H), spriteMat);
-    sprite.position.set(0, H / 2 - 3, 3);
-    sprite.renderOrder = 2;
-    group.add(sprite);
+    const add = (geo: THREE.BufferGeometry, mat: THREE.Material, parent: THREE.Object3D = body) => {
+      const m = new THREE.Mesh(geo, mat);
+      m.castShadow = true;
+      m.receiveShadow = true;
+      parent.add(m);
+      return m;
+    };
 
-    // weicher Bodenschatten
-    if (!this.shadowTex) {
-      const c = document.createElement('canvas');
-      c.width = c.height = 64;
-      const g = c.getContext('2d')!;
-      const gr = g.createRadialGradient(32, 32, 2, 32, 32, 32);
-      gr.addColorStop(0, 'rgba(0,0,0,0.75)');
-      gr.addColorStop(1, 'rgba(0,0,0,0)');
-      g.fillStyle = gr;
-      g.fillRect(0, 0, 64, 64);
-      this.shadowTex = new THREE.CanvasTexture(c);
+    // Laufwerk
+    for (const side of [-1, 1]) {
+      const z = side * 8.4;
+      const tr = add(new THREE.BoxGeometry(27, 6.8, 4.8), rubber);
+      tr.position.set(0, 3.7, z);
+      for (let i = -13; i <= 13; i++) {
+        const link = add(new THREE.BoxGeometry(0.55, 7.2, 5.1), darkMat);
+        link.position.set(i, 3.7, z);
+      }
+      for (const e of [-1, 1]) {
+        const cap = add(new THREE.CylinderGeometry(3.5, 3.5, 4.8, 18), rubber);
+        cap.rotation.x = Math.PI / 2;
+        cap.position.set(e * 13.5, 3.5, z);
+        const sp = add(new THREE.CylinderGeometry(2.2, 2.2, 5.3, 12), wheelMat);
+        sp.rotation.x = Math.PI / 2;
+        sp.position.set(e * 13.5, 3.5, z);
+      }
+      for (let i = -3; i <= 3; i++) {
+        const w = add(new THREE.CylinderGeometry(2.5, 2.5, 5.3, 14), wheelMat);
+        w.rotation.x = Math.PI / 2;
+        w.position.set(i * 3.9, 3.2, z);
+        const hub = add(new THREE.CylinderGeometry(1, 1, 5.6, 8), trimMat);
+        hub.rotation.x = Math.PI / 2;
+        hub.position.set(i * 3.9, 3.2, z);
+      }
+      // Seitenschürze in Segmenten + Kotflügel
+      for (let i = 0; i < 5; i++) {
+        const sk = add(this.extrude([[-2.3, 0], [2.3, 0], [2.3, 3.6], [-2.3, 3.6]], 1.6, 0.3), bodyMat);
+        sk.position.set(-9.6 + i * 4.85, 6, side * 11);
+      }
+      const fender = add(new THREE.BoxGeometry(29, 0.8, 5.4), bodyMat);
+      fender.position.set(0, 9.9, z);
+      const bin = add(new THREE.BoxGeometry(5, 2.2, 2.4), darkMat);
+      bin.position.set(-9, 11.2, side * 9.2);
     }
-    const shadow = new THREE.Mesh(new THREE.PlaneGeometry(96, 40), new THREE.MeshBasicMaterial({ map: this.shadowTex, transparent: true, depthWrite: false, fog: false }));
-    shadow.rotation.x = -Math.PI / 2;
-    shadow.position.set(0, 0.6, 2);
-    group.add(shadow);
 
-    // Kanone (3D, folgt exakt dem Zielwinkel)
+    // Wanne mit steilem Glacis
+    const hull = add(this.extrude([[-13.5, 0], [14, 0], [15.4, 3], [12, 6.8], [-12.5, 7.4], [-15.4, 4.4]], 15.5, 0.9), bodyMat);
+    hull.position.y = 5.6;
+    const deck = add(new THREE.BoxGeometry(11, 0.7, 11), darkMat);
+    deck.position.set(-6.5, 13.2, 0);
+    const vents = add(new THREE.BoxGeometry(6, 0.6, 8), darkMat);
+    vents.position.set(-10, 13.7, 0);
+    for (const sz of [-1, 1]) {
+      const hl = add(new THREE.BoxGeometry(1.2, 1.4, 2.6), lampF);
+      hl.position.set(15, 9.4, sz * 5.8);
+      const tl = add(new THREE.BoxGeometry(1, 1.5, 2.3), lampR);
+      tl.position.set(-15.6, 9.8, sz * 5.8);
+      const glowF = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.glowTex, color: '#ffe2a0', transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, opacity: 0.8, fog: false }));
+      glowF.scale.set(6, 6, 1);
+      glowF.position.set(16.5, 9.4, sz * 5.8);
+      body.add(glowF);
+      const glowR = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.glowTex, color: '#ff3020', transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, opacity: 0.95, fog: false }));
+      glowR.scale.set(5.5, 5.5, 1);
+      glowR.position.set(-16.6, 9.8, sz * 5.8);
+      body.add(glowR);
+    }
+    // reaktive Panzerung auf dem Glacis
+    for (let i = 0; i < 3; i++) {
+      const era = add(new THREE.BoxGeometry(2.6, 1.2, 12), bodyMat);
+      era.position.set(9 + i * 1.6, 11.6 - i * 1.1, 0);
+      era.rotation.z = -0.55;
+    }
+
+    // Turm (Teil des gedrehten Rumpfes)
+    const turret = new THREE.Group();
+    turret.position.set(-1, 13.1, 0);
+    body.add(turret);
+    add(this.extrude([[-9.8, 0], [8.4, 0], [11, 2.5], [9.8, 5.8], [-2.5, 6.6], [-10.4, 4.6]], 13, 0.8), bodyMat, turret);
+    for (const sz of [-1, 1]) {
+      const wedge = add(this.extrude([[0, 0], [5.5, 0], [6.5, 4.5], [1, 5.2]], 1.8, 0.3), bodyMat, turret);
+      wedge.position.set(5.2, 0.8, sz * 6.8);
+    }
+    const cup = add(new THREE.CylinderGeometry(2, 2.2, 1.7, 14), darkMat, turret);
+    cup.position.set(-4.5, 7.3, 3.2);
+    const mg = add(new THREE.CylinderGeometry(0.24, 0.24, 3.4, 6), darkMat, turret);
+    mg.rotation.z = Math.PI / 2;
+    mg.position.set(-3, 8.5, 3.2);
+    const sight = add(new THREE.BoxGeometry(2.4, 1.8, 2.6), darkMat, turret);
+    sight.position.set(3.5, 7.4, -3.4);
+    const ant = add(new THREE.CylinderGeometry(0.12, 0.12, 18, 4), darkMat, turret);
+    ant.position.set(-8.5, 13, -4.8);
+    for (let i = 0; i < 4; i++) {
+      const sm = add(new THREE.CylinderGeometry(0.58, 0.58, 1.7, 6), darkMat, turret);
+      sm.rotation.z = Math.PI / 2;
+      sm.position.set(7.4, 3.9, -6.4 + i * 1.0);
+    }
+    const bustle = add(new THREE.BoxGeometry(5.2, 3.4, 11), darkMat, turret);
+    bustle.position.set(-12, 2.4, 0);
+
+    // Kanone im Zielwinkel (liegt in der Spielebene)
     const gun = new THREE.Group();
-    gun.position.set(PIVOT_X, PIVOT_Y, 4);
+    gun.position.set(PIVOT_X, PIVOT_Y, 0);
     group.add(gun);
     const barrel = new THREE.Group();
     gun.add(barrel);
     const addB = (geo: THREE.BufferGeometry, mat: THREE.Material) => {
       const m = new THREE.Mesh(geo, mat);
       m.castShadow = true;
+      m.receiveShadow = true;
       barrel.add(m);
       return m;
     };
-    const tube = addB(new THREE.CylinderGeometry(1.15, 1.75, BARREL_LEN, 12), bodyMat);
+    const mant = addB(new THREE.CylinderGeometry(3.6, 3.6, 7.4, 14), bodyMat);
+    mant.rotation.x = Math.PI / 2;
+    mant.position.x = 1.5;
+    const tube = addB(new THREE.CylinderGeometry(1.3, 1.65, BARREL_LEN, 14), darkMat);
     tube.rotation.z = -Math.PI / 2;
-    tube.position.x = BARREL_LEN / 2 - 2;
-    const sleeve = addB(new THREE.CylinderGeometry(1.9, 1.9, 10, 12), bodyMat);
+    tube.position.x = BARREL_LEN / 2;
+    const sleeve = addB(new THREE.CylinderGeometry(2.05, 2.05, 13, 14), bodyMat);
     sleeve.rotation.z = -Math.PI / 2;
-    sleeve.position.x = 9;
-    const brake = addB(new THREE.CylinderGeometry(1.7, 1.7, 3, 12), darkMat);
+    sleeve.position.x = 14;
+    const evac = addB(new THREE.CylinderGeometry(1.9, 1.9, 3.2, 12), darkMat);
+    evac.rotation.z = -Math.PI / 2;
+    evac.position.x = 28;
+    const brake = addB(new THREE.CylinderGeometry(1.9, 1.9, 3, 12), trimMat);
     brake.rotation.z = -Math.PI / 2;
-    brake.position.x = BARREL_LEN - 2;
+    brake.position.x = BARREL_LEN - 0.5;
 
     const shield = new THREE.Mesh(
-      new THREE.SphereGeometry(26, 24, 16),
+      new THREE.SphereGeometry(30, 24, 16),
       new THREE.MeshBasicMaterial({
         color: new THREE.Color(0.25, 1.1, 1.7), transparent: true, opacity: 0.22, depthWrite: false,
         blending: THREE.AdditiveBlending, toneMapped: false,
       })
     );
-    shield.position.y = 14;
+    shield.position.y = 16;
     shield.visible = false;
     group.add(shield);
 
+    // Bodenschatten
+    if (!this.shadowTex) {
+      const c = document.createElement('canvas');
+      c.width = c.height = 64;
+      const g = c.getContext('2d')!;
+      const gr = g.createRadialGradient(32, 32, 2, 32, 32, 32);
+      gr.addColorStop(0, 'rgba(0,0,0,0.7)');
+      gr.addColorStop(1, 'rgba(0,0,0,0)');
+      g.fillStyle = gr;
+      g.fillRect(0, 0, 64, 64);
+      this.shadowTex = new THREE.CanvasTexture(c);
+    }
+    const shadow = new THREE.Mesh(new THREE.PlaneGeometry(100, 52), new THREE.MeshBasicMaterial({ map: this.shadowTex, transparent: true, depthWrite: false, fog: false }));
+    shadow.rotation.x = -Math.PI / 2;
+    shadow.position.set(0, 0.8, 0);
+    group.add(shadow);
+
     group.scale.setScalar(TANK_SCALE);
-    return { group, gun, barrel, shield, tilt: 0, recoil: 0, smokeT: 0, bodyMat, body, yaw: 0, baseColor: bodyMat.color.clone(), dead: false, wreckTilt: 0, sprite, spriteMat, colorHex, texReady: false, flip: 1 };
+    const dummyMat = new THREE.MeshBasicMaterial();
+    return { group, gun, barrel, shield, tilt: 0, recoil: 0, smokeT: 0, bodyMat, body, yaw: -0.4, baseColor: bodyMat.color.clone(), dead: false, wreckTilt: 0, sprite: body, spriteMat: dummyMat, colorHex, texReady: true, flip: 1 };
   }
-  private tankImgRequested = false;
+  private shadowTex: THREE.CanvasTexture | null = null;
 
   private syncTanks(sim: GameSimulation, dt: number): void {
     const ids = new Set(sim.tanks.map((t) => t.id));
@@ -1115,8 +1258,7 @@ export class DioramaRenderer {
           this.burners.push({ x: tank.x, z: 0, t: 0, dur: 30, acc: 0, kind: 'flame', size: 9 }, { x: tank.x, z: 0, t: 0, dur: 30, acc: 0, kind: 'smoke', size: 12 });
         }
         vis.group.visible = true;
-        if (!vis.texReady) { const tx = this.teamTexture(vis.colorHex); if (tx) { vis.spriteMat.map = tx; vis.spriteMat.opacity = 1; vis.spriteMat.needsUpdate = true; vis.texReady = true; } }
-        vis.gun.position.x = PIVOT_X * vis.flip;
+                vis.gun.position.x = PIVOT_X * vis.flip;
         const gy = t.getHeight(tank.x);
         const sl = Math.atan2(t.getHeight(tank.x + 9) - t.getHeight(tank.x - 9), 18);
         vis.group.position.set(tank.x, gy - 1.5, 0);
@@ -1137,9 +1279,10 @@ export class DioramaRenderer {
       vis.group.position.set(tank.x, tank.y, 0);
       vis.group.rotation.z = vis.tilt;
       vis.gun.rotation.z = (tank.angle * Math.PI) / 180 - vis.tilt;
-      if (!vis.texReady) { const tx = this.teamTexture(vis.colorHex); if (tx) { vis.spriteMat.map = tx; vis.spriteMat.opacity = 1; vis.spriteMat.needsUpdate = true; vis.texReady = true; } }
-      vis.flip = tank.angle <= 90 ? 1 : -1;
-      vis.sprite.scale.x = vis.flip;
+            vis.flip = tank.angle <= 90 ? 1 : -1;
+      const targetYaw = vis.flip > 0 ? -0.42 : Math.PI + 0.42;
+      vis.yaw += (targetYaw - vis.yaw) * Math.min(1, dt * 6);
+      vis.body.rotation.y = vis.yaw;
       vis.gun.position.x = PIVOT_X * vis.flip;
       vis.recoil = Math.max(0, vis.recoil - dt * 4);
       vis.barrel.position.x = -vis.recoil * 6;
@@ -1474,7 +1617,7 @@ export class DioramaRenderer {
     const ca = g.getAttribute('color') as THREE.BufferAttribute;
     const rad = (opts.aim.angle * Math.PI) / 180;
     const speed = opts.aim.power * POWER_TO_SPEED;
-    let x = me.x + (opts.aim.angle <= 90 ? 16 : -16) + Math.cos(rad) * 57;
+    let x = me.x + (opts.aim.angle <= 90 ? 22 : -22) + Math.cos(rad) * 57;
     let y = me.y + 38 + Math.sin(rad) * 57;
     let vx = Math.cos(rad) * speed;
     let vy = Math.sin(rad) * speed;
@@ -1499,13 +1642,13 @@ export class DioramaRenderer {
   /* ----------------------------- Render ---------------------------- */
 
   public render(sim: GameSimulation, dt: number, opts: RenderOptions): void {
+    this.terrainRef = sim.terrain;
     if (this.lastTerrain !== sim.terrain || this.lastRound !== sim.round) {
       this.lastTerrain = sim.terrain;
       this.lastRound = sim.round;
       this.resetBattlefield();
       sim.terrain.markAllDirty();
     }
-    this.terrainRef = sim.terrain;
     this.windDrift = sim.wind * 0.5;
     this.syncTerrain(sim);
     this.syncTanks(sim, dt);
@@ -1533,8 +1676,8 @@ export class DioramaRenderer {
     const z = this.baseZ * (1 - this.camZoom);
     const bob = Math.sin(this.elapsed * 0.35) * 1.8;
     const sway = Math.sin(this.elapsed * 0.21) * 14;
-    this.camera.position.set(this.camX + sway - 95, 440 + bob - this.camZoom * 40, z);
-    this.camera.lookAt(this.camX * 0.92 + cx * 0.08 - 60, 175 - this.camZoom * 30, 0);
+    this.camera.position.set(this.camX + sway - 80, 420 + bob - this.camZoom * 30, z);
+    this.camera.lookAt(this.camX * 0.92 + cx * 0.08 - 40, 85 - this.camZoom * 25, 0);
     if (this.shakeIntensity > 0.2) {
       this.camera.position.x += (Math.random() - 0.5) * this.shakeIntensity;
       this.camera.position.y += (Math.random() - 0.5) * this.shakeIntensity;

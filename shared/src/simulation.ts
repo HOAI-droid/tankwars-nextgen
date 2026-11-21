@@ -129,7 +129,7 @@ export class GameSimulation {
       id: `p_${++this.projCounter}`,
       ownerId: tank.id,
       weaponId,
-      x: tank.x + (cmd.angle <= 90 ? 16 : -16) + Math.cos(rad) * 57,
+      x: tank.x + (cmd.angle <= 90 ? 22 : -22) + Math.cos(rad) * 57,
       y: tank.y + 38 + Math.sin(rad) * 57,
       vx: Math.cos(rad) * speed,
       vy: Math.sin(rad) * speed,
