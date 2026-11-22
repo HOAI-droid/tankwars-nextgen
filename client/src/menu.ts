@@ -59,7 +59,7 @@ export class StartMenu {
   private renderMain(): void {
     this.listEl = null;
     const savedName = localStorage.getItem('tw_name') || '';
-    const savedMode = localStorage.getItem('tw_mode') || 'SIMULTANEOUS';
+    const savedMode = localStorage.getItem('tw_mode2') || 'CLASSIC';
 
     this.el.innerHTML = `
       <div class="menu-wrap">
@@ -70,8 +70,8 @@ export class StartMenu {
             <div class="field" style="flex:1.3"><label>NAME</label><input id="m-name" class="input" maxlength="14" value="${esc(savedName)}" placeholder="Kommandant" autocomplete="off" /></div>
             <div class="field"><label>MODUS</label>
               <select id="m-mode">
-                <option value="SIMULTANEOUS" ${savedMode === 'SIMULTANEOUS' ? 'selected' : ''}>Simultan</option>
-                <option value="CLASSIC" ${savedMode === 'CLASSIC' ? 'selected' : ''}>Reihum</option>
+                <option value="CLASSIC" ${savedMode === 'CLASSIC' ? 'selected' : ''}>Original (Reihum)</option>
+                <option value="SIMULTANEOUS" ${savedMode === 'SIMULTANEOUS' ? 'selected' : ''}>Simultan-Chaos</option>
               </select>
             </div>
           </div>
@@ -97,7 +97,7 @@ export class StartMenu {
     const prefs = () => {
       const name = nameEl.value.trim() || 'Kommandant';
       localStorage.setItem('tw_name', nameEl.value.trim());
-      localStorage.setItem('tw_mode', modeEl.value);
+      localStorage.setItem('tw_mode2', modeEl.value);
       return name;
     };
     const busy = (b: boolean, msg = '') => {

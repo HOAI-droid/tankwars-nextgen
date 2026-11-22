@@ -6,6 +6,7 @@ export interface WorldTheme {
   bg: number;
   rain: boolean;
   water: boolean;
+  rebound: boolean;
   biome: number;
   seed: number;
 }
@@ -27,7 +28,7 @@ export class Terrain {
   public readonly dirtyChunks = new Set<number>();
 
   /** Welt-Thema (wird mit dem Gelände erzeugt und an Mitspieler übertragen). */
-  public theme: WorldTheme = { bg: 0, rain: true, water: false, biome: 0, seed: 0 };
+  public theme: WorldTheme = { bg: 0, rain: true, water: false, rebound: false, biome: 0, seed: 0 };
 
   constructor(seed = Math.random() * 1000) {
     this.heights = new Float32Array(this.width);
@@ -40,7 +41,7 @@ export class Terrain {
     const bg = Math.floor(rnd() * 5);
     // Himmel/Kulisse bestimmen, ob es regnet (bg: 0 Gewitter, 1 sonnig, 2 Ruinen, 3 Sturmküste, 4 Alien)
     const rainChance = [0.8, 0.12, 0.6, 0.85, 0.6][bg];
-    this.theme = { bg, rain: rnd() < rainChance, water: rnd() < 0.45, biome, seed };
+    this.theme = { bg, rain: rnd() < rainChance, water: rnd() < 0.45, rebound: rnd() < 0.3, biome, seed };
 
     const p1 = rnd() * 100, p2 = rnd() * 100, p3 = rnd() * 100;
     const f1 = 0.0028 + rnd() * 0.0055;
@@ -130,6 +131,27 @@ export class Terrain {
         this.dirtyChunks.add(Math.floor(x / CHUNK_SIZE));
       }
     }
+  }
+
+  /** Lose Erde rutscht nach (Crumbling Hills). Gibt true zurück, solange sich noch etwas bewegt. */
+  public crumble(maxSlope = 2.4, passes = 3): boolean {
+    let moved = false;
+    for (let p = 0; p < passes; p++) {
+      for (let x = 0; x < this.width - 1; x++) {
+        const d = this.heights[x] - this.heights[x + 1];
+        if (Math.abs(d) > maxSlope) {
+          const m = (Math.abs(d) - maxSlope) * 0.45;
+          const hi = d > 0 ? x : x + 1;
+          const lo = d > 0 ? x + 1 : x;
+          this.heights[hi] -= m;
+          this.heights[lo] += m;
+          this.dirtyChunks.add(Math.floor(x / CHUNK_SIZE));
+          this.dirtyChunks.add(Math.floor((x + 1) / CHUNK_SIZE));
+          moved = true;
+        }
+      }
+    }
+    return moved;
   }
 
   public markAllDirty(): void {

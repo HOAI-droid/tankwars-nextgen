@@ -1,14 +1,15 @@
 export type GameMode = 'CLASSIC' | 'SIMULTANEOUS';
 export type TurnPhase = 'PLANNING' | 'RESOLVING' | 'SHOP' | 'GAME_OVER';
 
-export type BotDifficulty = 'MR_STUPID' | 'LOBBER' | 'RIFLEMAN' | 'WINDMASTER';
+export type BotDifficulty = 'MR_STUPID' | 'LOBBER' | 'RIFLEMAN' | 'WINDMASTER' | 'WINDLESS_WIT' | 'LOB_SHOOT' | 'TWANGER';
 
 export type WeaponId =
   | 'BABY_MISSILE'
   | 'MISSILE'
   | 'MIRV'
   | 'NUKE'
-  | 'DIRT_BALL';
+  | 'DIRT_BALL'
+  | 'HAND_GRENADE';
 
 export interface WeaponDef {
   id: WeaponId;
@@ -42,6 +43,7 @@ export interface Tank {
   selectedWeapon: WeaponId;
   inventory: Record<WeaponId, number>;
   ready: boolean;
+  dropping?: boolean;
 }
 
 export interface ShotCommand {

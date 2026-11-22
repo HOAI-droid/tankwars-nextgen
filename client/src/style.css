@@ -464,3 +464,51 @@ input[type='range']::-moz-range-thumb { width: 14px; height: 20px; background: v
   #turn-info { font-size: 11px !important; min-height: 0; }
   .sys { height: 32px !important; min-width: 36px !important; font-size: 12px !important; }
 }
+
+#rebound-badge { color: #c77dff; font-weight: 700; border: 1px solid #c77dff; border-radius: 4px; padding: 0 6px; font-size: 12px; }
+
+/* VGA-Modus: DOS-Oberfläche, die Werte stehen im Bild */
+body.vga #roster, body.vga #center-info, body.vga #nameplates, body.vga #floaters { display: none !important; }
+
+/* ---------- Touch / niedrige Bildschirme: schmale Bedienleiste ---------- */
+@media (pointer: coarse), (max-height: 520px) {
+  #deck {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 118px 92px !important;
+    grid-template-areas: 'ang pow wep fire' !important;
+    grid-template-rows: auto !important;
+    display: grid !important;
+    gap: 4px 10px !important;
+    padding: 4px 8px !important;
+    bottom: calc(4px + var(--safe-b)) !important;
+    width: calc(100vw - 12px - var(--safe-l) - var(--safe-r)) !important;
+    border-radius: 10px !important;
+    align-items: center;
+  }
+  .dial, .meter, .step { display: none !important; }
+  .gauge { display: block !important; min-width: 0; }
+  .gauge-body { display: block !important; width: 100%; }
+  .gauge-label { display: flex !important; justify-content: space-between; align-items: baseline; font-size: 10px !important; letter-spacing: 2px; line-height: 1; margin: 0 2px; }
+  .touch-val { display: inline !important; font-size: 15px !important; }
+  .stepper { display: block !important; }
+  input[type='range'] { width: 100% !important; height: 34px !important; margin: 0 !important; }
+  input[type='range']::-webkit-slider-runnable-track { height: 8px !important; border-radius: 4px !important; }
+  input[type='range']::-webkit-slider-thumb { width: 34px !important; height: 34px !important; margin-top: -13px !important; border-radius: 50% !important; clip-path: none !important; }
+  input[type='range']::-moz-range-thumb { width: 32px !important; height: 32px !important; }
+  #weapons { overflow: hidden !important; max-height: none !important; }
+  #weapons .wcard { display: none !important; }
+  #weapons .wcard.sel { display: flex !important; width: 100%; min-width: 0 !important; height: 44px; padding: 2px 6px !important; flex-direction: row; gap: 6px; }
+  #weapons .wcard.sel b { font-size: 10px; white-space: normal; line-height: 1.05; text-align: left; }
+  #weapons .wcard.sel::after { content: '⟳'; font-size: 16px; color: var(--accent2); }
+  #weapons .wcard.sel i { flex: none; }
+  .fire { width: 100% !important; min-height: 44px !important; height: 44px; }
+  .fire span { font-size: 18px !important; letter-spacing: 1px; }
+  .fire small { display: none !important; }
+  #roster { width: 104px !important; min-width: 0 !important; }
+  .r-row { padding: 1px 6px 1px 0 !important; }
+  .r-row .nm { font-size: 9px !important; }
+  .r-row .hpbar { height: 2px; margin-top: 0; }
+  #round-label { font-size: 15px !important; }
+  #turn-info { font-size: 10px !important; }
+}
+body.vga #hud-top { top: calc(30px + var(--safe-t)); }
+body.vga #sys-buttons { opacity: .85; }

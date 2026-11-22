@@ -10,6 +10,15 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
     maxDamage: 35,
     color: '#ffcc33',
   },
+  HAND_GRENADE: {
+    id: 'HAND_GRENADE',
+    name: 'Handgranate',
+    price: 0,
+    bundleSize: 99,
+    explosionRadius: 11,
+    maxDamage: 28,
+    color: '#c9d1a0',
+  },
   MISSILE: {
     id: 'MISSILE',
     name: 'Schwere Rakete',
@@ -52,6 +61,7 @@ export const WEAPONS: Record<WeaponId, WeaponDef> = {
 
 export const INITIAL_INVENTORY: Record<WeaponId, number> = {
   BABY_MISSILE: Infinity,
+  HAND_GRENADE: Infinity,
   MISSILE: 3,
   MIRV: 1,
   NUKE: 0,

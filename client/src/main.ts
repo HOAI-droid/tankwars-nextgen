@@ -3,6 +3,7 @@ import '@fontsource/chakra-petch/700.css';
 import '@fontsource/black-ops-one/400.css';
 import './style.css';
 import {
+  BotDifficulty,
   computeBotShot,
   ExplosionEvent,
   GameMode,
@@ -108,18 +109,21 @@ function startDemo(): void {
   setInMenu(true);
 }
 
-const BOT_NAMES: Array<[string, 'MR_STUPID' | 'LOBBER' | 'RIFLEMAN' | 'WINDMASTER']> = [
+const BOT_NAMES: Array<[string, BotDifficulty]> = [
   ['Mr. Stupid', 'MR_STUPID'],
   ['Lobber', 'LOBBER'],
   ['Rifleman', 'RIFLEMAN'],
   ['Windmaster', 'WINDMASTER'],
+  ['Windless Wit', 'WINDLESS_WIT'],
+  ['Lob & Shoot', 'LOB_SHOOT'],
+  ['Twanger', 'TWANGER'],
 ];
 
 function fillWithBots(
   humans: LobbyPlayer[],
   total: number
-): Array<{ id: string; name: string; color: string; isBot: boolean; botType?: (typeof BOT_NAMES)[number][1] }> {
-  const list: Array<{ id: string; name: string; color: string; isBot: boolean; botType?: (typeof BOT_NAMES)[number][1] }> =
+): Array<{ id: string; name: string; color: string; isBot: boolean; botType?: BotDifficulty }> {
+  const list: Array<{ id: string; name: string; color: string; isBot: boolean; botType?: BotDifficulty }> =
     humans.map((p) => ({ id: p.id, name: p.name, color: p.color, isBot: false }));
   let i = 0;
   while (list.length < Math.max(total, 2)) {
@@ -289,7 +293,7 @@ function hostBroadcast(dt: number): void {
   const interval = sim.phase === 'RESOLVING' ? 0.05 : 0.5;
   if (!netDirty && netAcc < interval && pendingExplosions.length === 0) return;
   netAcc = 0;
-  const withTerrain = netTerrain || pendingExplosions.length > 0;
+  const withTerrain = netTerrain || pendingExplosions.length > 0 || sim.phase === 'RESOLVING';
   const snap = sim.getSnapshot(withTerrain);
   snap.explosions = pendingExplosions;
   // Infinity/undefined sind nicht übertragbar -> bereinigte Kopie senden
@@ -318,8 +322,14 @@ function applySnapshot(snap: ReturnType<GameSimulation['getSnapshot']>): void {
 
   if (snap.theme) sim.terrain.theme = snap.theme;
   if (snap.terrain) {
-    sim.terrain.heights.set(snap.terrain);
-    sim.terrain.markAllDirty();
+    const H = sim.terrain.heights;
+    const full = snap.round !== lastSnapRound;
+    for (let i = 0; i < snap.terrain.length; i++) {
+      if (full || Math.abs(H[i] - snap.terrain[i]) > 0.01) {
+        H[i] = snap.terrain[i];
+        sim.terrain.dirtyChunks.add(Math.floor(i / 50));
+      }
+    }
   }
   if (snap.explosions?.length) triggerExplosions(snap.explosions);
 
@@ -403,6 +413,10 @@ function renderWeapons(): void {
     .join('');
   weaponsEl.querySelectorAll<HTMLButtonElement>('.wcard').forEach((c) =>
     c.addEventListener('click', () => {
+      if (window.matchMedia('(pointer: coarse)').matches && c.classList.contains('sel')) {
+        cycleWeapon(1);
+        return;
+      }
       chosenWeapon = c.dataset.w as WeaponId;
       weaponSig = '';
       syncAimUi();
@@ -532,6 +546,7 @@ btnRetro.addEventListener('click', () => {
   retroCanvas.classList.toggle('hidden', !isRetro);
   crtOverlay.classList.toggle('hidden', !isRetro);
   btnRetro.classList.toggle('active', isRetro);
+  document.body.classList.toggle('vga', isRetro);
   plateLayer.style.visibility = isRetro ? 'hidden' : '';
 });
 btnSound.addEventListener('click', () => {
@@ -652,6 +667,7 @@ function updateHud(): void {
   windVal.textContent = `WIND ${Math.abs(w)}`;
   windL.classList.toggle('on', w < -2);
   windR.classList.toggle('on', w > 2);
+  $('rebound-badge').classList.toggle('hidden', !sim.terrain.theme.rebound);
 
   let info = '';
   let disabled = true;
@@ -723,7 +739,7 @@ function loop(now: number): void {
         botCooldown += dt;
         if (botCooldown > 0.8) {
           botCooldown = 0;
-          sim.submitShot(computeBotShot(active, sim.tanks, sim.wind));
+          sim.submitShot(computeBotShot(active, sim.tanks, sim.wind, sim.terrain.theme.rebound));
           audio.playShoot();
           diorama.kick(active.id);
           netDirty = true;
@@ -746,7 +762,10 @@ function loop(now: number): void {
         triggerExplosions(sim.recentExplosions);
         if (role === 'host') pendingExplosions.push(...sim.recentExplosions);
       }
-      if (before !== sim.phase) netDirty = true;
+      if (before !== sim.phase) {
+        netDirty = true;
+        netTerrain = true;
+      }
     }
 
     if (role === 'host') hostBroadcast(dt);
@@ -778,7 +797,17 @@ function loop(now: number): void {
       : null;
 
   if (isRetro) {
-    retro.render(sim, dt, diorama.screenMap());
+    const hudT = sim.mode === 'CLASSIC' ? sim.tanks[sim.activeTankIndex] : me;
+    retro.render(sim, dt, diorama.screenMap(), {
+      name: hudT?.name ?? '',
+      power: Number(inputPower.value),
+      angle: Number(inputAngle.value),
+      men: hudT ? Math.max(1, Math.round(hudT.hp / 100)) : 1,
+      mine: !!hudT && hudT.id === myTankId,
+      hp: hudT?.hp ?? 0,
+      money: hudT?.money ?? 0,
+      round: sim.round,
+    });
   } else {
     diorama.render(sim, dt, { myId: myTankId, aim, cinematic: role === 'demo' });
   }

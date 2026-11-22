@@ -5,7 +5,8 @@ const GRAVITY = 280;
 export function computeBotShot(
   bot: Tank,
   allTanks: Tank[],
-  wind: number
+  wind: number,
+  rebound = false
 ): ShotCommand {
   const targets = allTanks.filter((t) => t.alive && t.id !== bot.id);
   const target = targets[Math.floor(Math.random() * targets.length)];
@@ -34,6 +35,31 @@ export function computeBotShot(
     case 'RIFLEMAN':
       angle = shootRight ? 30 + Math.random() * 12 : 138 + Math.random() * 12;
       power = estimatePower(Math.abs(dx), dy, angle, 0) + (Math.random() - 0.5) * 8;
+      break;
+
+    case 'WINDLESS_WIT': // Physik ohne Windkorrektur
+      angle = shootRight ? 52 : 128;
+      power = estimatePower(Math.abs(dx), dy, angle, 0) + (Math.random() - 0.5) * 3;
+      break;
+
+    case 'LOB_SHOOT':
+      if (!rebound) {
+        angle = shootRight ? 68 + Math.random() * 10 : 102 + Math.random() * 10;
+        power = estimatePower(Math.abs(dx), dy, angle, 0) + (Math.random() - 0.5) * 14;
+      } else {
+        angle = shootRight ? 30 + Math.random() * 12 : 138 + Math.random() * 12;
+        power = 95;
+      }
+      break;
+
+    case 'TWANGER':
+      if (rebound) {
+        angle = 70 + Math.random() * 40;
+        power = 80 + Math.random() * 20;
+      } else {
+        angle = shootRight ? 30 + Math.random() * 12 : 138 + Math.random() * 12;
+        power = estimatePower(Math.abs(dx), dy, angle, 0) + (Math.random() - 0.5) * 8;
+      }
       break;
 
     case 'WINDMASTER':

@@ -29,6 +29,7 @@ export class GameSimulation {
   private pendingShots = new Map<string, ShotCommand>();
   private projCounter = 0;
   private autoTimer = 0;
+  private crumbling = false;
 
   constructor(mode: GameMode = 'SIMULTANEOUS') {
     this.mode = mode;
@@ -57,7 +58,8 @@ export class GameSimulation {
         isBot: p.isBot,
         botType: p.botType,
         x,
-        y: this.terrain.getHeight(x),
+        y: this.terrain.getHeight(x) + 360 + i * 25,
+        dropping: true,
         angle: x < WORLD_WIDTH / 2 ? 45 : 135,
         power: 55,
         hp: 100,
@@ -73,12 +75,13 @@ export class GameSimulation {
       };
     });
 
-    this.activeTankIndex = 0;
+    this.activeTankIndex = Math.floor(Math.random() * this.tanks.length);
     this.phase = 'PLANNING';
   }
 
   public submitShot(cmd: ShotCommand): boolean {
     if (this.phase !== 'PLANNING') return false;
+    if (this.tanks.some((t) => t.dropping && t.alive)) return false;
     const tank = this.tanks.find((t) => t.id === cmd.tankId && t.alive);
     if (!tank) return false;
 
@@ -109,7 +112,7 @@ export class GameSimulation {
       const cmd =
         this.pendingShots.get(tank.id) ??
         (tank.isBot
-          ? computeBotShot(tank, this.tanks, this.wind)
+          ? computeBotShot(tank, this.tanks, this.wind, this.terrain.theme.rebound)
           : { tankId: tank.id, angle: tank.angle, power: tank.power, weaponId: tank.selectedWeapon });
       this.spawnProjectile(tank, cmd);
       tank.ready = false;
@@ -185,7 +188,11 @@ export class GameSimulation {
         continue;
       }
 
-      if (p.x < 0 || p.x >= WORLD_WIDTH) {
+      if (this.terrain.theme.rebound) {
+        if (p.x < 0) { p.x = -p.x; p.vx = Math.abs(p.vx); }
+        else if (p.x >= WORLD_WIDTH) { p.x = 2 * WORLD_WIDTH - p.x - 1; p.vx = -Math.abs(p.vx); }
+        if (p.y > 760) { p.y = 760; p.vy = -Math.abs(p.vy); }
+      } else if (p.x < 0 || p.x >= WORLD_WIDTH) {
         p.alive = false;
         continue;
       }
@@ -203,21 +210,24 @@ export class GameSimulation {
 
     this.projectiles = this.projectiles.filter((p) => p.alive);
 
+    if (this.crumbling && this.terrain.crumble()) { /* Erde rutscht nach */ } else this.crumbling = false;
+
     let anyFalling = false;
     for (const tank of this.tanks) {
       if (!tank.alive) continue;
       const groundY = this.terrain.getHeight(tank.x);
       if (tank.y > groundY + 0.5) {
-        anyFalling = true;
-        const fallSpeed = tank.parachutes > 0 ? 45 : 160;
+        if (!tank.dropping) anyFalling = true;
+        const fallSpeed = tank.dropping ? 260 : tank.parachutes > 0 ? 45 : 160;
         const drop = Math.min(tank.y - groundY, fallSpeed * dt);
         tank.y -= drop;
-        if (tank.parachutes === 0 && drop > 0) {
+        if (!tank.dropping && tank.parachutes === 0 && drop > 0) {
           tank.hp -= drop * 0.25;
           if (tank.hp <= 0) this.killTank(tank);
         }
       } else {
         tank.y = groundY;
+        tank.dropping = false;
       }
     }
 
@@ -251,6 +261,7 @@ export class GameSimulation {
       }
     }
 
+    if (!def.isDirt || true) this.crumbling = true;
     this.recentExplosions.push({
       x: p.x,
       y: p.y,
@@ -331,7 +342,8 @@ export class GameSimulation {
       const x = Math.round(margin + i * step + (Math.random() - 0.5) * 20);
       this.terrain.flattenPlatform(x, 14);
       tank.x = x;
-      tank.y = this.terrain.getHeight(x);
+      tank.y = this.terrain.getHeight(x) + 360 + i * 25;
+      tank.dropping = true;
       tank.hp = tank.maxHp;
       tank.alive = true;
       tank.ready = false;
@@ -339,7 +351,7 @@ export class GameSimulation {
       tank.angle = x < WORLD_WIDTH / 2 ? 45 : 135;
     });
 
-    this.activeTankIndex = 0;
+    this.activeTankIndex = Math.floor(Math.random() * this.tanks.length);
     this.phase = 'PLANNING';
   }
 
