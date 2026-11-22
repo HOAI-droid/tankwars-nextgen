@@ -15,6 +15,7 @@ const DESC: Record<string, string> = {
   LASER: 'Sofort-Strahl in Zielrichtung. Die Kraft bestimmt den Schaden.',
   GUIDED_H: 'Steuert im Flug seitlich auf den Gegner zu.',
   GUIDED_V: 'Stürzt senkrecht auf den Gegner herab.',
+  DRILL: 'Bohrt sich tief ins Gelände und sprengt einen Hohlraum – Panzer stürzen ab.',
   SHIELD: 'Absorbiert Schaden, bevor deine Panzerung leidet.',
   PARACHUTE: 'Bremst Stürze nach Erdrutschen ab.',
 };

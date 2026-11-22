@@ -20,7 +20,9 @@ export type WeaponId =
   | 'EXPLOSIVE_DIRT'
   | 'LASER'
   | 'GUIDED_H'
-  | 'GUIDED_V';
+  | 'GUIDED_V'
+  | 'BOMBLET'
+  | 'DRILL';
 
 export interface WeaponDef {
   id: WeaponId;
@@ -31,7 +33,9 @@ export interface WeaponDef {
   maxDamage: number;
   isDirt?: boolean;
   splitCount?: number;
-  kind?: 'laser' | 'cri' | 'sonic' | 'xdirt' | 'lead';
+  kind?: 'laser' | 'cri' | 'sonic' | 'xdirt' | 'lead' | 'drill';
+  damageRadius?: number;
+  knockback?: { radius: number; min: number; max: number };
   cri?: { n: number; fluent: boolean; r: number };
   guide?: 'H' | 'V';
   color: string;

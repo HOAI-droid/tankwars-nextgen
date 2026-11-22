@@ -268,24 +268,8 @@ export class GameSimulation {
       p.y += p.vy * dt;
 
       const def = WEAPONS[p.weaponId];
-      if (def.splitCount && !p.hasSplit && prevVy > 0 && p.vy <= 0) {
-        p.hasSplit = true;
-        p.alive = false;
-        const spread = 45;
-        for (let i = 0; i < def.splitCount; i++) {
-          const offset = (i - (def.splitCount - 1) / 2) * spread;
-          this.projectiles.push({
-            id: `p_${++this.projCounter}`,
-            ownerId: p.ownerId,
-            weaponId: 'BABY_MISSILE',
-            x: p.x,
-            y: p.y,
-            vx: p.vx + offset,
-            vy: p.vy,
-            hasSplit: true,
-            alive: true,
-          });
-        }
+      if (def.splitCount && !p.hasSplit && p.vy < 0 && p.y - this.terrain.getHeight(p.x) <= 100) {
+        this.splitProjectile(p, def.splitCount);
         continue;
       }
 
@@ -304,6 +288,10 @@ export class GameSimulation {
       );
 
       if (p.y <= groundY || hitTank) {
+        if (def.splitCount && !p.hasSplit) {
+          this.splitProjectile(p, def.splitCount);
+          continue;
+        }
         p.alive = false;
         this.detonate(p);
       }
@@ -342,6 +330,40 @@ export class GameSimulation {
     }
   }
 
+  /** Streubombe: fächerförmig 60-120 Grad nach oben und außen in Sprengköpfe zerplatzen. */
+  private splitProjectile(p: Projectile, n: number): void {
+    p.hasSplit = true;
+    p.alive = false;
+    this.recentExplosions.push({ x: p.x, y: p.y, radius: 18, isDirt: false, weaponId: 'MIRV' });
+    for (let i = 0; i < n; i++) {
+      const ang = ((60 + (60 * i) / Math.max(1, n - 1)) * Math.PI) / 180;
+      const sp = 150 + Math.random() * 90;
+      this.projectiles.push({
+        id: `p_${++this.projCounter}`,
+        ownerId: p.ownerId,
+        weaponId: 'BOMBLET',
+        x: p.x,
+        y: p.y,
+        vx: p.vx * 0.3 + Math.cos(ang) * sp * 1.1,
+        vy: Math.abs(Math.sin(ang)) * sp * 0.6,
+        hasSplit: true,
+        alive: true,
+      });
+    }
+  }
+
+  private damageTank(tank: Tank, dmgIn: number, ownerId: string): void {
+    let dmg = Math.round(dmgIn);
+    if (dmg <= 0) return;
+    if (tank.shield > 0) {
+      const absorbed = Math.min(tank.shield, dmg);
+      tank.shield -= absorbed;
+      dmg -= absorbed;
+    }
+    tank.hp -= dmg;
+    if (tank.hp <= 0) this.killTank(tank, ownerId);
+  }
+
   private detonate(p: Projectile): void {
     const def = WEAPONS[p.weaponId];
     if (def.kind === 'sonic') {
@@ -361,22 +383,34 @@ export class GameSimulation {
       for (let i = 0; i < 9; i++) this.terrain.addDirt(p.x + (Math.random() - 0.5) * 140, p.y + 20 + Math.random() * 70, 14 + Math.random() * 10);
     } else if (def.isDirt) {
       this.terrain.addDirt(p.x, p.y, def.explosionRadius);
+    } else if (def.kind === 'drill') {
+      // Erdbohrer: frisst sich 60-90 Pixel tief und sprengt unter der Oberfläche einen Hohlraum
+      const cy = this.terrain.getHeight(p.x) - 75;
+      this.terrain.carveCrater(p.x, cy, def.explosionRadius);
+      const dr = def.damageRadius ?? def.explosionRadius + 14;
+      for (const tank of this.tanks) {
+        if (!tank.alive) continue;
+        const dist = Math.hypot(tank.x - p.x, tank.y + 6 - cy);
+        if (dist < dr) this.damageTank(tank, def.maxDamage * (1 - dist / dr), p.ownerId);
+      }
+      this.crumbling = true;
+      this.recentExplosions.push({ x: p.x, y: cy, radius: def.explosionRadius, isDirt: true, weaponId: p.weaponId });
+      return;
     } else {
       this.terrain.carveCrater(p.x, p.y, def.explosionRadius);
+      const dr = def.damageRadius ?? def.explosionRadius + 14;
       for (const tank of this.tanks) {
         if (!tank.alive) continue;
         const dist = Math.hypot(tank.x - p.x, tank.y + 6 - p.y);
-        if (dist < def.explosionRadius + 14) {
-          const factor = 1 - dist / (def.explosionRadius + 14);
-          let dmg = Math.round(def.maxDamage * factor);
-          if (tank.shield > 0) {
-            const absorbed = Math.min(tank.shield, dmg);
-            tank.shield -= absorbed;
-            dmg -= absorbed;
-          }
-          tank.hp -= dmg;
-          if (tank.hp <= 0) {
-            this.killTank(tank, p.ownerId);
+        if (dist < dr) this.damageTank(tank, def.maxDamage * (1 - dist / dr), p.ownerId);
+        // Druckwelle schleudert Panzer weg
+        const kb = def.knockback;
+        if (kb && tank.alive) {
+          const dd = Math.hypot(tank.x - p.x, tank.y - p.y);
+          if (dd < kb.radius) {
+            const push = kb.min + (kb.max - kb.min) * (1 - dd / kb.radius);
+            const dir = tank.x >= p.x ? 1 : -1;
+            tank.x = Math.max(20, Math.min(WORLD_WIDTH - 20, tank.x + dir * push));
           }
         }
       }
