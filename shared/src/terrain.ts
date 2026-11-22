@@ -2,11 +2,32 @@ export const WORLD_WIDTH = 1000;
 export const WORLD_HEIGHT = 600;
 export const CHUNK_SIZE = 50;
 
+export interface WorldTheme {
+  bg: number;
+  rain: boolean;
+  water: boolean;
+  biome: number;
+  seed: number;
+}
+
+function mulberry(a: number): () => number {
+  return () => {
+    a |= 0;
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
 export class Terrain {
   public readonly width = WORLD_WIDTH;
   public readonly height = WORLD_HEIGHT;
   public readonly heights: Float32Array;
   public readonly dirtyChunks = new Set<number>();
+
+  /** Welt-Thema (wird mit dem Gelände erzeugt und an Mitspieler übertragen). */
+  public theme: WorldTheme = { bg: 0, rain: true, water: false, biome: 0, seed: 0 };
 
   constructor(seed = Math.random() * 1000) {
     this.heights = new Float32Array(this.width);
@@ -14,17 +35,48 @@ export class Terrain {
   }
 
   public generate(seed: number): void {
-    const f1 = 0.004 + (seed % 3) * 0.001;
-    const f2 = 0.011;
-    const f3 = 0.025;
+    const rnd = mulberry(Math.floor(seed * 1000) + 7);
+    const biome = Math.floor(rnd() * 6);
+    const bg = Math.floor(rnd() * 5);
+    // Himmel/Kulisse bestimmen, ob es regnet (bg: 0 Gewitter, 1 sonnig, 2 Ruinen, 3 Sturmküste, 4 Alien)
+    const rainChance = [0.8, 0.12, 0.6, 0.85, 0.6][bg];
+    this.theme = { bg, rain: rnd() < rainChance, water: rnd() < 0.45, biome, seed };
+
+    const p1 = rnd() * 100, p2 = rnd() * 100, p3 = rnd() * 100;
+    const f1 = 0.0028 + rnd() * 0.0055;
+    const f2 = 0.008 + rnd() * 0.008;
+    const f3 = 0.02 + rnd() * 0.02;
+    const base = 170 + rnd() * 110;
+    // Gauß-Berge für Gipfel-Biome
+    const peaks = [rnd() * 1000, rnd() * 1000, rnd() * 1000].map((x) => ({ x, w: 70 + rnd() * 110, h: 90 + rnd() * 150 }));
 
     for (let x = 0; x < this.width; x++) {
-      const h =
-        210 +
-        Math.sin(x * f1 + seed) * 95 +
-        Math.sin(x * f2 + seed * 1.7) * 45 +
-        Math.cos(x * f3 + seed * 0.5) * 18;
-      this.heights[x] = Math.max(60, Math.min(this.height - 140, h));
+      let h: number;
+      switch (biome) {
+        case 1: // schroffe Grate
+          h = base + Math.abs(Math.sin(x * f1 * 1.6 + p1)) * 150 - 70 + Math.sin(x * f2 + p2) * 32 + Math.sin(x * f3 + p3) * 12;
+          break;
+        case 2: { // Plateaus und Schluchten
+          const t = Math.sin(x * f1 * 1.3 + p1) + Math.sin(x * f2 * 0.7 + p2) * 0.5;
+          h = base + Math.round(t * 1.6) * 52 + Math.sin(x * f3 + p3) * 9;
+          break;
+        }
+        case 3: // einzelne Gipfel
+          h = base - 20 + peaks.reduce((acc, pk) => acc + pk.h * Math.exp(-Math.pow((x - pk.x) / pk.w, 2)), 0) + Math.sin(x * f3 + p3) * 10;
+          break;
+        case 4: // sanfte Dünen
+          h = base - 20 + Math.sin(x * f1 * 1.8 + p1) * 48 + Math.sin(x * f2 + p2) * 24 + Math.sin(x * f3 + p3) * 8;
+          break;
+        default: // wellige Hügel
+          h = base + Math.sin(x * f1 + p1) * 95 + Math.sin(x * f2 + p2) * 45 + Math.cos(x * f3 + p3) * 18;
+      }
+      this.heights[x] = Math.max(50, Math.min(this.height - 140, h));
+    }
+    // leichtes Glätten, damit keine Nadeln entstehen
+    for (let pass = 0; pass < (biome === 2 ? 14 : 3); pass++) {
+      for (let x = 1; x < this.width - 1; x++) {
+        this.heights[x] = (this.heights[x - 1] + this.heights[x] * 2 + this.heights[x + 1]) / 4;
+      }
     }
     this.markAllDirty();
   }

@@ -129,8 +129,8 @@ export class GameSimulation {
       id: `p_${++this.projCounter}`,
       ownerId: tank.id,
       weaponId,
-      x: tank.x + (cmd.angle <= 90 ? 34 : -34) + Math.cos(rad) * 30,
-      y: tank.y + 30 + Math.sin(rad) * 30,
+      x: tank.x + (cmd.angle <= 90 ? 34 : -34) + Math.cos(rad) * 38,
+      y: tank.y + 30 + Math.sin(rad) * 38,
       vx: Math.cos(rad) * speed,
       vy: Math.sin(rad) * speed,
       hasSplit: false,
@@ -355,6 +355,7 @@ export class GameSimulation {
       projectiles: this.projectiles,
       explosions: this.recentExplosions,
       terrain: includeTerrain ? Array.from(this.terrain.heights) : undefined,
+      theme: this.terrain.theme,
     };
   }
 }

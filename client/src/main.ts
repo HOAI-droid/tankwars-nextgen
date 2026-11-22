@@ -316,6 +316,7 @@ function applySnapshot(snap: ReturnType<GameSimulation['getSnapshot']>): void {
   sim.projectiles = snap.projectiles;
   for (const t of sim.tanks) t.inventory.BABY_MISSILE = Infinity; // JSON kennt kein Infinity
 
+  if (snap.theme) sim.terrain.theme = snap.theme;
   if (snap.terrain) {
     sim.terrain.heights.set(snap.terrain);
     sim.terrain.markAllDirty();
@@ -507,7 +508,10 @@ window.addEventListener('keydown', (e) => {
 });
 
 window.addEventListener('contextmenu', (e) => e.preventDefault());
-window.addEventListener('resize', () => diorama.resize());
+window.addEventListener('resize', () => {
+  diorama.resize();
+  retro.resize();
+});
 
 function updateModeButton(): void {
   btnMode.textContent = sim.mode === 'SIMULTANEOUS' ? 'SIMULTAN' : 'REIHUM';
@@ -774,7 +778,7 @@ function loop(now: number): void {
       : null;
 
   if (isRetro) {
-    retro.render(sim, dt);
+    retro.render(sim, dt, diorama.screenMap());
   } else {
     diorama.render(sim, dt, { myId: myTankId, aim, cinematic: role === 'demo' });
   }
