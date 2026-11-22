@@ -26,27 +26,28 @@ export interface RetroHud {
   hp: number;
   money: number;
   round: number;
+  inv: boolean[];
+  sel: number;
 }
 
-/** Himmels-Paletten ("Backgrounds A..E") wie im DOS-Original: weich verlaufende Farbbänder. */
-const SKIES: Array<Array<[number, number, number]>> = [
-  [[0, 0, 40], [0, 0, 90], [20, 30, 150], [60, 90, 200], [140, 170, 230]],
-  [[10, 0, 40], [60, 0, 90], [150, 30, 100], [230, 100, 60], [255, 190, 90]],
-  [[0, 20, 20], [0, 60, 70], [0, 120, 110], [60, 180, 150], [170, 230, 190]],
-  [[30, 0, 0], [90, 10, 10], [170, 40, 20], [230, 110, 30], [255, 200, 80]],
-  [[20, 0, 50], [50, 0, 110], [90, 20, 170], [150, 80, 210], [210, 150, 240]],
-];
+const BG = ['#1c1418', '#14141c', '#181410', '#101818', '#1c101c'];
+const MAGENTA = '#d048d0';
+const TRAIL_COLORS: Record<string, string> = {};
 
 /**
- * VGA-Modus im Stil von "Tank Wars" (Kenny Morse, 1990): 320 Pixel breit, 256-Farben-Look,
- * Farbverlauf-Himmel, mehrfarbig geschichtetes Erdreich, Schusspur, Infoleiste oben.
+ * VGA-Modus im Stil des DOS-Originals "Tank Wars" (Kenny Morse, 1990):
+ * dunkler Himmel mit Sternen, leuchtend grünes Gelände, magentafarbener Rahmen,
+ * Kopfzeile mit Angle / Power / Direction / Wind / Men, Waffenleiste, dauerhafte bunte Flugbahnen.
  * Die Kamera ist identisch zur 3D-Ansicht, damit alle Positionen gleich bleiben.
  */
 export class RetroRenderer {
   private ctx: CanvasRenderingContext2D;
   private blasts: RetroBlast[] = [];
   private beams: Array<BeamEvent & { life: number }> = [];
-  private trails = new Map<string, Array<[number, number]>>();
+  private trails = new Map<string, { pts: Array<[number, number]>; color: string }>();
+  private stars: Array<[number, number, string]> = [];
+  private lastTerrain: unknown = null;
+  private lastRound = -1;
   private W = 320;
   private H = 200;
   private t = 0;
@@ -64,6 +65,7 @@ export class RetroRenderer {
     this.canvas.width = this.W;
     this.canvas.height = this.H;
     this.ctx.imageSmoothingEnabled = false;
+    this.stars = [];
   }
 
   public spawnBeam(b: BeamEvent): void {
@@ -71,15 +73,12 @@ export class RetroRenderer {
   }
 
   public spawnExplosion(ev: ExplosionEvent): void {
-    this.blasts.push({ x: ev.x, y: ev.y, radius: ev.radius, life: 0.55, isDirt: ev.isDirt });
+    this.blasts.push({ x: ev.x, y: ev.y, radius: ev.radius, life: 0.7, isDirt: ev.isDirt });
   }
 
-  private text(s: string, x: number, y: number, color: string): void {
-    const c = this.ctx;
-    c.fillStyle = '#000';
-    c.fillText(s, x + 1, y + 1);
-    c.fillStyle = color;
-    c.fillText(s, x, y);
+  private label(s: string, x: number, y: number, color: string): void {
+    this.ctx.fillStyle = color;
+    this.ctx.fillText(s, x, y);
   }
 
   public render(sim: GameSimulation, dt: number, map: ScreenMap, hud: RetroHud): void {
@@ -89,38 +88,57 @@ export class RetroRenderer {
     const X = (x: number) => (map.ax * x + map.bx) * k;
     const Y = (y: number) => (map.ay * y + map.by) * k;
 
-    // Himmel: Farbverlauf in groben Stufen, Palette "rotiert" langsam (Palette Speed)
-    const pal = SKIES[(sim.terrain.theme.bg | 0) % SKIES.length];
-    const steps = 24;
-    const shift = (Math.sin(this.t * 0.4) + 1) * 0.04;
-    for (let i = 0; i < steps; i++) {
-      const f = Math.min(1, (i / (steps - 1)) + shift) * (pal.length - 1);
-      const a = Math.floor(f), b = Math.min(pal.length - 1, a + 1), m = f - a;
-      const col = [0, 1, 2].map((j) => Math.round(pal[a][j] * (1 - m) + pal[b][j] * m));
-      ctx.fillStyle = `rgb(${col[0]},${col[1]},${col[2]})`;
-      ctx.fillRect(0, Math.floor((this.H / steps) * i), this.W, Math.ceil(this.H / steps) + 1);
+    if (this.lastTerrain !== sim.terrain || this.lastRound !== sim.round) {
+      this.lastTerrain = sim.terrain;
+      this.lastRound = sim.round;
+      this.trails.clear();
+      this.stars = [];
+    }
+    if (this.stars.length === 0) {
+      let s = Math.floor(sim.terrain.theme.seed * 100) + 11;
+      const rnd = () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296);
+      const cols = ['#ffffff', '#ffff55', '#ff5555', '#55ffff', '#aaaaaa', '#ff55ff'];
+      for (let i = 0; i < 110; i++) this.stars.push([Math.floor(rnd() * this.W), Math.floor(rnd() * this.H), cols[Math.floor(rnd() * cols.length)]]);
     }
 
-    // Gelände mit Schichten
-    const grass = ['#58f058', '#30c030', '#209020'];
-    const earth = ['#a86830', '#905820', '#784810', '#603808', '#482800'];
+    // Hintergrund
+    ctx.fillStyle = BG[(sim.terrain.theme.bg | 0) % BG.length];
+    ctx.fillRect(0, 0, this.W, this.H);
+    for (const [sx, sy, c] of this.stars) {
+      ctx.fillStyle = c;
+      ctx.fillRect(sx, sy, 1, 1);
+    }
+
+    // Gelände: leuchtend grün, einfarbig
+    ctx.fillStyle = '#10e810';
     for (let px = 0; px < this.W; px++) {
       const wx = (px / k - map.bx) / map.ax;
-      if (wx < 0 || wx >= sim.terrain.width) continue;
-      const top = Math.floor(Y(sim.terrain.getHeight(wx)));
+      const top = Math.floor(Y(sim.terrain.getHeight(Math.max(0, Math.min(sim.terrain.width - 1, wx)))));
       if (top >= this.H) continue;
-      for (let y = Math.max(0, top); y < this.H; y++) {
-        const d = y - top;
-        ctx.fillStyle = d < 3 ? grass[d] : earth[Math.min(earth.length - 1, Math.floor((d - 3) / 7))];
-        ctx.fillRect(px, y, 1, 1);
-      }
+      ctx.fillRect(px, Math.max(0, top), 1, this.H - Math.max(0, top));
     }
 
-    // Wände bei Rebound
-    if (sim.terrain.theme.rebound) {
-      ctx.fillStyle = '#b050ff';
-      ctx.fillRect(Math.round(X(0)), 0, 1, this.H);
-      ctx.fillRect(Math.round(X(sim.terrain.width)) - 1, 0, 1, this.H);
+    // Flugbahnen: bleiben bis zum Rundenende sichtbar, in der Farbe des Schützen
+    for (const p of sim.projectiles) {
+      let tr = this.trails.get(p.id);
+      if (!tr) {
+        const owner = sim.tanks.find((t) => t.id === p.ownerId);
+        const key = owner?.color ?? '#ffffff';
+        TRAIL_COLORS[key] = key;
+        this.trails.set(p.id, (tr = { pts: [], color: key }));
+      }
+      tr.pts.push([p.x, p.y]);
+    }
+    for (const tr of this.trails.values()) {
+      ctx.fillStyle = tr.color;
+      let lx = -1, ly = -1;
+      for (const [wx, wy] of tr.pts) {
+        const px = Math.round(X(wx)), py = Math.round(Y(wy));
+        if (px === lx && py === ly) continue;
+        ctx.fillRect(px, py, 1, 1);
+        lx = px;
+        ly = py;
+      }
     }
 
     // Panzer im DOS-Stil
@@ -128,47 +146,30 @@ export class RetroRenderer {
       if (!tank.alive) continue;
       const tx = Math.round(X(tank.x));
       const ty = Math.round(Y(tank.y));
-      const w = Math.max(9, Math.round(map.ax * k * 70));
-      const h = Math.max(4, Math.round(w * 0.3));
-      const side = tank.angle <= 90 ? 1 : -1;
-      ctx.fillStyle = '#202020';
-      ctx.fillRect(tx - w / 2, ty - 2, w, 2);
+      const w = Math.max(9, Math.round(map.ax * k * 62));
+      const h = Math.max(3, Math.round(w * 0.28));
       ctx.fillStyle = tank.color;
-      ctx.fillRect(tx - w / 2 + 1, ty - h, w - 2, h - 2);
-      ctx.fillRect(tx - w / 4, ty - h - Math.max(2, h * 0.6), w / 2, Math.max(2, h * 0.6));
-      ctx.fillStyle = 'rgba(255,255,255,0.35)';
-      ctx.fillRect(tx - w / 2 + 1, ty - h, w - 2, 1);
-
+      ctx.fillRect(tx - w / 2, ty - h, w, h);
+      ctx.fillRect(tx - w / 4, ty - h - Math.max(2, h * 0.7), w / 2, Math.max(2, h * 0.7));
+      ctx.fillStyle = '#ffffff';
+      const side = tank.angle <= 90 ? 1 : -1;
       const rad = (tank.angle * Math.PI) / 180;
       const px0 = tank.x + side * 34, py0 = tank.y + 30;
-      ctx.strokeStyle = '#ffffff';
+      ctx.strokeStyle = tank.color;
       ctx.lineWidth = 2;
       ctx.beginPath();
       ctx.moveTo(X(px0), Y(py0));
-      ctx.lineTo(X(px0 + Math.cos(rad) * 38), Y(py0 + Math.sin(rad) * 38));
+      ctx.lineTo(X(px0 + Math.cos(rad) * 40), Y(py0 + Math.sin(rad) * 40));
       ctx.stroke();
       if (tank.shield > 0) {
         ctx.strokeStyle = '#55ffff';
         ctx.lineWidth = 1;
-        ctx.strokeRect(tx - w / 2 - 2, ty - h - 4, w + 4, h + 5);
+        ctx.strokeRect(tx - w / 2 - 2, ty - h - 5, w + 4, h + 6);
       }
     }
 
-    // Geschosse mit Schusspur
-    const live = new Set<string>();
-    for (const p of sim.projectiles) {
-      live.add(p.id);
-      let tr = this.trails.get(p.id);
-      if (!tr) this.trails.set(p.id, (tr = []));
-      tr.push([p.x, p.y]);
-    }
     ctx.fillStyle = '#ffffff';
-    for (const tr of this.trails.values()) {
-      for (let i = 0; i < tr.length; i += 3) ctx.fillRect(Math.round(X(tr[i][0])), Math.round(Y(tr[i][1])), 1, 1);
-    }
-    ctx.fillStyle = '#ffff55';
     for (const p of sim.projectiles) ctx.fillRect(Math.round(X(p.x)) - 1, Math.round(Y(p.y)) - 1, 2, 2);
-    if (sim.phase === 'PLANNING') this.trails.clear();
 
     for (const b of this.beams) {
       b.life -= dt;
@@ -181,36 +182,62 @@ export class RetroRenderer {
     }
     this.beams = this.beams.filter((b) => b.life > 0);
 
-    // Explosionen: Farbpalette Weiß -> Gelb -> Rot
+    // Explosionen: buntes Pixel-Konfetti wie im Original
+    const conf = ['#ffffff', '#ffff55', '#ff5555', '#55ff55', '#5555ff', '#ff55ff', '#55ffff', '#ff9900'];
     for (const b of this.blasts) {
       b.life -= dt;
       if (b.life <= 0) continue;
-      const age = 1 - b.life / 0.55;
-      const r = Math.max(2, Math.round(b.radius * map.ax * k * (0.5 + age)));
-      const cols = b.isDirt ? ['#c88848', '#a86830'] : ['#ffffff', '#ffff55', '#ff9900', '#ff2200'];
-      const ci = Math.min(cols.length - 1, Math.floor(age * cols.length));
-      ctx.fillStyle = cols[ci];
-      ctx.beginPath();
-      ctx.arc(Math.round(X(b.x)), Math.round(Y(b.y)), r, 0, Math.PI * 2);
-      ctx.fill();
+      const age = 1 - b.life / 0.7;
+      const r = Math.max(3, b.radius * map.ax * k * (0.7 + age * 0.6));
+      const n = Math.floor(r * r * 0.9);
+      for (let i = 0; i < n; i++) {
+        const a = Math.random() * Math.PI * 2, d = Math.sqrt(Math.random()) * r;
+        ctx.fillStyle = b.isDirt ? (Math.random() < 0.5 ? '#a86830' : '#10e810') : conf[Math.floor(Math.random() * conf.length)];
+        ctx.fillRect(Math.round(X(b.x) + Math.cos(a) * d), Math.round(Y(b.y) + Math.sin(a) * d), 1, 1);
+      }
     }
     this.blasts = this.blasts.filter((b) => b.life > 0);
 
-    // Infoleiste wie im Original: POWER / ANGLE / DIRECTION / MEN / WIND
+    // Rahmen
+    ctx.strokeStyle = MAGENTA;
+    ctx.lineWidth = 1;
+    ctx.strokeRect(2.5, 29.5, this.W - 5, this.H - 32);
+    ctx.strokeRect(4.5, 31.5, this.W - 9, this.H - 36);
+    if (sim.terrain.theme.rebound) {
+      ctx.font = 'bold 8px monospace';
+      ctx.textBaseline = 'top';
+      this.label('R', 6, 33, '#ff9500');
+    }
+
+    // Kopfzeile wie im Original
     ctx.fillStyle = '#000000';
-    ctx.fillRect(0, 0, this.W, 11);
-    ctx.fillStyle = '#4040a0';
-    ctx.fillRect(0, 11, this.W, 1);
+    ctx.fillRect(0, 0, this.W, 28);
     ctx.font = 'bold 8px monospace';
     ctx.textBaseline = 'top';
     const wind = Math.round(sim.wind);
-    const dir = hud.angle <= 90 ? '>' : '<';
-    this.text(`${hud.name.slice(0, 10).toUpperCase()}`, 2, 2, hud.mine ? '#ffff55' : '#aaaaaa');
-    this.text(`POWER ${String(hud.power).padStart(3, '0')}`, 62, 2, '#55ff55');
-    this.text(`ANGLE ${String(hud.angle).padStart(3, '0')}`, 118, 2, '#ffff55');
-    this.text(`DIR ${dir}`, 174, 2, '#ffffff');
-    this.text(`MEN ${hud.men}`, 204, 2, '#55ffff');
-    this.text(`WIND ${wind < 0 ? '<' : '>'}${Math.abs(wind)}`, 244, 2, '#ff9955');
-    if (sim.terrain.theme.rebound) this.text('R', 312, 2, '#c060ff');
+    const dir = hud.angle <= 90 ? '→' : '←';
+    this.label('Angle:', 2, 2, MAGENTA);
+    this.label(String(hud.angle), 38, 2, '#ffff55');
+    this.label(hud.name.slice(0, 12).toUpperCase(), this.W / 2 - hud.name.slice(0, 12).length * 2.4, 2, hud.mine ? '#ffffff' : '#9a9a9a');
+    this.label('Direction(', this.W - 82, 2, MAGENTA);
+    this.label(dir, this.W - 24, 2, '#ffff55');
+    this.label(')', this.W - 14, 2, MAGENTA);
+    this.label('Power:', 2, 11, MAGENTA);
+    this.label(String(hud.power), 38, 11, '#ffff55');
+    this.label('Wind:', this.W / 2 - 24, 11, '#5555ff');
+    this.label(`${Math.abs(wind)} ${wind < 0 ? '←' : '→'}`, this.W / 2 + 10, 11, '#8888ff');
+    this.label('Men:', this.W - 70, 11, MAGENTA);
+    this.label(String(hud.men), this.W - 40, 11, '#ffff55');
+
+    // Waffenleiste: sichtbare Kästchen, aktive Waffe rot
+    const n = hud.inv.length;
+    const bw = Math.floor((this.W - 8) / Math.max(n, 20));
+    for (let i = 0; i < n; i++) {
+      const bx = 4 + i * bw;
+      ctx.fillStyle = i === hud.sel ? '#ff2020' : hud.inv[i] ? '#e0e0e0' : '#303030';
+      ctx.fillRect(bx, 20, bw - 2, 7);
+      ctx.fillStyle = '#000';
+      ctx.fillRect(bx + 2, 22, Math.max(1, bw - 6), 3);
+    }
   }
 }

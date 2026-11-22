@@ -327,6 +327,9 @@ export class DioramaRenderer {
 
   private tankVisuals = new Map<string, TankVisual>();
   private projMeshes = new Map<string, { mesh: THREE.Group; trail: number; lastX?: number; lastY?: number }>();
+  public trails = new Map<string, { pts: number[]; color: THREE.Color }>();
+  private trailMesh!: THREE.Mesh;
+  private trailDirty = false;
 
   private clouds: Cloud[] = [];
   private elapsed = 0;
@@ -394,6 +397,19 @@ export class DioramaRenderer {
     this.setupStage();
     this.setupFoliage();
     this.setupWeather();
+    {
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(90000 * 3), 3));
+      g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(90000 * 3), 3));
+      g.setDrawRange(0, 0);
+      this.trailMesh = new THREE.Mesh(
+        g,
+        new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.78, depthWrite: false, depthTest: false, fog: false, toneMapped: false, side: THREE.DoubleSide })
+      );
+      this.trailMesh.frustumCulled = false;
+      this.trailMesh.renderOrder = 4;
+      this.scene.add(this.trailMesh);
+    }
 
     // Sprite-Pools
     const mk = (additive: boolean): Fx => {
@@ -531,6 +547,8 @@ export class DioramaRenderer {
   }
 
   private resetBattlefield(): void {
+    this.trails.clear();
+    this.trailDirty = true;
     this.scorch.fill(0);
     this.rubble.length = 0;
     this.rubbleMesh.count = 0;
@@ -610,8 +628,7 @@ export class DioramaRenderer {
       this.bgTex.push(t);
     }
     this.plateMat = new THREE.MeshBasicMaterial({ map: this.bgTex[0], depthWrite: false, fog: false, color: '#e6eaf0' });
-    const bw = 2600, bh = bw * (1116 / 2000);
-    this.plate = new THREE.Mesh(new THREE.PlaneGeometry(bw, bh), this.plateMat);
+    this.plate = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), this.plateMat);
     this.plate.position.set(WORLD_WIDTH / 2, 150, -1500);
     this.plate.renderOrder = -5;
     this.scene.add(this.plate);
@@ -924,6 +941,21 @@ export class DioramaRenderer {
     }
     mp.needsUpdate = true;
   }
+
+  /** Kulisse so skalieren, dass sie das Bild bei jedem Seitenverhältnis komplett ausfüllt. */
+  private fitPlate(): void {
+    const cam = this.camera;
+    const dist = cam.position.z - this.plate.position.z;
+    const visH = 2 * dist * Math.tan((cam.fov * Math.PI) / 360);
+    const visW = visH * cam.aspect;
+    const imgA = 2000 / 1116;
+    const H = Math.max(visH * 1.3, (visW * 1.3) / imgA);
+    this.plate.scale.set(H * imgA, H, 1);
+    const k = dist / cam.position.z;
+    this.plate.position.x = cam.position.x;
+    this.plate.position.y = cam.position.y + (this.lookTargetY - cam.position.y) * k + H * 0.02;
+  }
+  private lookTargetY = 130;
 
   public resize(): void {
     const w = window.innerWidth;
@@ -1413,11 +1445,53 @@ export class DioramaRenderer {
         const bx = lx + (p.x - lx) * f, by = ly + (p.y - ly) * f;
         if (i === n) this.emitFire(bx, by, 0, 0, 0, 0, 0.16, 6, 2, '#fff0b8', col, 0.9);
         // Kondensstreifen: dünne weiße Rauchspur, die lange stehen bleibt und langsam zerfasert
-        this.emitSmoke(bx, by, 0, this.windDrift * 0.4, 1.5, 0, 4.2 + Math.random() * 0.8, 3.2, 9, '#f2f4f7', 0.5);
+        this.emitSmoke(bx, by, 0, this.windDrift * 0.4, 1.5, 0, 2.4 + Math.random() * 0.6, 3.6, 12, '#f2f4f7', 0.45);
       }
       v.lastX = p.x;
       v.lastY = p.y;
+
+      // dauerhafte Flugbahn
+      let tr = this.trails.get(p.id);
+      if (!tr) {
+        const owner = sim.tanks.find((t) => t.id === p.ownerId);
+        tr = { pts: [], color: new THREE.Color(owner?.color ?? '#ffffff').lerp(new THREE.Color('#ffffff'), 0.4).multiplyScalar(1.6) };
+        this.trails.set(p.id, tr);
+      }
+      const n2 = tr.pts.length;
+      if (n2 === 0 || Math.hypot(p.x - tr.pts[n2 - 2], p.y - tr.pts[n2 - 1]) > 2.5) {
+        tr.pts.push(p.x, p.y);
+        this.trailDirty = true;
+      }
     }
+    if (this.trailDirty) this.rebuildTrails();
+  }
+
+  private rebuildTrails(): void {
+    this.trailDirty = false;
+    const g = this.trailMesh.geometry;
+    const pos = g.getAttribute('position') as THREE.BufferAttribute;
+    const col = g.getAttribute('color') as THREE.BufferAttribute;
+    let v = 0;
+    const max = 90000 - 6;
+    for (const tr of this.trails.values()) {
+      const P = tr.pts;
+      for (let i = 2; i < P.length && v < max; i += 2) {
+        const x0 = P[i - 2], y0 = P[i - 1], x1 = P[i], y1 = P[i + 1];
+        const dx = x1 - x0, dy = y1 - y0;
+        const len = Math.hypot(dx, dy) || 1;
+        const nx = (-dy / len) * 1.7, ny = (dx / len) * 1.7;
+        const fade = 0.55 + 0.45 * (i / P.length);
+        const quad = [x0 + nx, y0 + ny, x0 - nx, y0 - ny, x1 + nx, y1 + ny, x1 + nx, y1 + ny, x0 - nx, y0 - ny, x1 - nx, y1 - ny];
+        for (let k = 0; k < 6; k++) {
+          pos.setXYZ(v, quad[k * 2], quad[k * 2 + 1], 5);
+          col.setXYZ(v, tr.color.r * fade, tr.color.g * fade, tr.color.b * fade);
+          v++;
+        }
+      }
+    }
+    g.setDrawRange(0, v);
+    pos.needsUpdate = true;
+    col.needsUpdate = true;
   }
 
   /* ----------------------------- Partikel -------------------------- */
@@ -1747,7 +1821,9 @@ export class DioramaRenderer {
     const bob = Math.sin(this.elapsed * 0.35) * 1.8;
     const sway = Math.sin(this.elapsed * 0.21) * 14;
     this.camera.position.set(this.camX + sway - 95, 440 + bob - this.camZoom * 40, z);
+    this.lookTargetY = 175 - this.camZoom * 30;
     this.camera.lookAt(this.camX * 0.92 + cx * 0.08 - 60, 175 - this.camZoom * 30, 0);
+    this.fitPlate();
     if (this.shakeIntensity > 0.2) {
       this.camera.position.x += (Math.random() - 0.5) * this.shakeIntensity;
       this.camera.position.y += (Math.random() - 0.5) * this.shakeIntensity;

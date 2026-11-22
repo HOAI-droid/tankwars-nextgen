@@ -512,3 +512,36 @@ body.vga #roster, body.vga #center-info, body.vga #nameplates, body.vga #floater
 }
 body.vga #hud-top { top: calc(30px + var(--safe-t)); }
 body.vga #sys-buttons { opacity: .85; }
+
+
+body.vga #sys-buttons { margin-left: auto; }
+
+/* ---------- Menü & Shop auf niedrigen Bildschirmen (Handy quer) ---------- */
+@media (max-height: 560px) {
+  .screen { padding: 8px; align-items: center; }
+  .menu-wrap { grid-template-columns: 0.8fr 1.2fr !important; gap: 14px !important; max-height: 100%; overflow: hidden; align-items: center; }
+  .logo { text-align: left !important; }
+  .logo .pre { font-size: 9px; letter-spacing: 4px; }
+  .logo h1 { font-size: clamp(30px, 8vw, 56px) !important; margin-top: 2px; }
+  .logo p { display: none; }
+  .card { padding: 10px 12px !important; gap: 6px !important; max-height: calc(100vh - 16px); overflow-y: auto; touch-action: pan-y; }
+  .card h2 { font-size: 10px; margin: 0; }
+  .field label { font-size: 8px; letter-spacing: 2px; }
+  .input, .card select { padding: 6px 8px !important; font-size: 13px !important; }
+  .code-input { font-size: 17px !important; letter-spacing: 8px !important; }
+  .btn { padding: 8px 10px !important; font-size: 12px !important; letter-spacing: 2px !important; }
+  .btn.primary { padding: 9px !important; font-size: 13px !important; }
+  .divider { margin: 0 !important; font-size: 8px; }
+  .err { min-height: 0 !important; font-size: 11px; }
+  .code-big { font-size: 40px !important; letter-spacing: 8px !important; }
+  .plist { max-height: 90px; }
+  .shop-wrap { gap: 6px; }
+  .shop-head h2 { font-size: 22px !important; }
+  .cash { font-size: 20px !important; }
+  .shop-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 5px; }
+  .item { padding: 6px 8px; gap: 2px; }
+  .item .d { display: none; }
+  .res { padding: 3px 8px; font-size: 10px; }
+  .shop-foot .btn { min-width: 160px !important; }
+}
+body.vga #hud-top { top: calc(28 / 320 * 100vw + 6px) !important; }

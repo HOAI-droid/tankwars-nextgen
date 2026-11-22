@@ -854,6 +854,8 @@ function loop(now: number): void {
       hp: hudT?.hp ?? 0,
       money: hudT?.money ?? 0,
       round: sim.round,
+      inv: (Object.keys(WEAPONS) as WeaponId[]).slice(0, 20).map((id) => !!hudT && hudT.inventory[id] > 0),
+      sel: (Object.keys(WEAPONS) as WeaponId[]).slice(0, 20).indexOf(hudT && hudT.id === myTankId ? chosenWeapon : hudT?.selectedWeapon ?? 'BABY_MISSILE'),
     });
   } else {
     diorama.render(sim, dt, { myId: myTankId, aim, cinematic: role === 'demo' });
