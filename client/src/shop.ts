@@ -55,6 +55,32 @@ export class ShopOverlay {
     this.render();
   }
 
+  /** Siegerehrung am Ende des Spiels (Games per Set). */
+  public showFinal(standings: Tank[], canRestart: boolean, onRestart: () => void, onMenu: () => void): void {
+    this.isOpen = true;
+    this.el.classList.remove('hidden', 'out');
+    const rank = [...standings].sort((a, b) => (b.wins ?? 0) - (a.wins ?? 0) || b.score - a.score || b.money - a.money);
+    this.el.innerHTML = `
+      <div class="shop-wrap">
+        <div class="shop-head"><div><small>SPIEL BEENDET</small><h2>${rank[0] ? esc(rank[0].name).toUpperCase() + ' GEWINNT' : 'ENDSTAND'}</h2></div></div>
+        <div class="shop-grid" style="grid-template-columns:1fr">
+          ${rank
+            .map(
+              (t, i) => `<div class="item" style="cursor:default;flex-direction:row;align-items:center;gap:12px">
+            <span class="p" style="min-width:34px">${i + 1}.</span>
+            <span class="t" style="flex:1"><i style="background:${t.color};color:${t.color}"></i>${esc(t.name)}</span>
+            <span class="d" style="min-height:0">Siege ${t.wins ?? 0} · Abschüsse ${t.score}</span>
+            <span class="p">$${t.money.toLocaleString('de-DE')}</span></div>`
+            )
+            .join('')}
+        </div>
+        <div class="shop-foot"><button id="fin-menu" class="btn ghost">Hauptmenü</button>
+          ${canRestart ? '<button id="fin-again" class="btn primary">Neues Spiel</button>' : '<span class="hint">Der Host startet ein neues Spiel…</span>'}</div>
+      </div>`;
+    this.el.querySelector('#fin-again')?.addEventListener('click', onRestart);
+    this.el.querySelector('#fin-menu')!.addEventListener('click', onMenu);
+  }
+
   public hide(): void {
     if (!this.isOpen) return;
     this.isOpen = false;

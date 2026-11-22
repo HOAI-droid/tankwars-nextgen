@@ -29,6 +29,7 @@ export class GameSimulation {
   public activeTankIndex = 0;
   public wind = 0;
   public round = 1;
+  public totalRounds = 10;
 
   private pendingShots = new Map<string, ShotCommand>();
   private projCounter = 0;
@@ -393,7 +394,10 @@ export class GameSimulation {
     const alive = this.tanks.filter((t) => t.alive);
     if (alive.length <= 1) {
       for (const t of this.tanks) t.money += 500;
-      if (alive[0]) alive[0].money += 1500;
+      if (alive[0]) {
+        alive[0].money += 1500;
+        alive[0].wins = (alive[0].wins ?? 0) + 1;
+      }
       this.phase = 'GAME_OVER';
       return;
     }
@@ -467,6 +471,7 @@ export class GameSimulation {
       mode: this.mode,
       phase: this.phase,
       round: this.round,
+      totalRounds: this.totalRounds,
       wind: this.wind,
       activeTankIndex: this.activeTankIndex,
       tanks: this.tanks,

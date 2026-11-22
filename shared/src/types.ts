@@ -58,6 +58,7 @@ export interface Tank {
   inventory: Record<WeaponId, number>;
   ready: boolean;
   dropping?: boolean;
+  wins?: number;
 }
 
 export interface ShotCommand {

@@ -2,8 +2,8 @@ import { GameMode } from '@tankwars/shared';
 import { ClientSession, HostSession, LobbyPlayer } from './network.js';
 
 export interface StartMenuCallbacks {
-  onSolo: (playerName: string, mode: GameMode) => void;
-  onCreate: (playerName: string, mode: GameMode) => Promise<HostSession>;
+  onSolo: (playerName: string, mode: GameMode, rounds: number) => void;
+  onCreate: (playerName: string, mode: GameMode, rounds: number) => Promise<HostSession>;
   onJoin: (code: string, playerName: string) => Promise<ClientSession>;
   onHostStart: (totalPlayers: number) => void;
   onLeave: () => void;
@@ -59,6 +59,7 @@ export class StartMenu {
   private renderMain(): void {
     this.listEl = null;
     const savedName = localStorage.getItem('tw_name') || '';
+    const savedRounds = localStorage.getItem('tw_rounds') || '5';
     const savedMode = localStorage.getItem('tw_mode2') || 'CLASSIC';
 
     this.el.innerHTML = `
@@ -75,6 +76,8 @@ export class StartMenu {
               </select>
             </div>
           </div>
+          <div class="field"><label>RUNDEN PRO SPIEL (GAMES PER SET)</label>
+            <select id="m-rounds">${[1, 3, 5, 10, 20].map((n) => `<option value="${n}" ${String(n) === savedRounds ? 'selected' : ''}>${n}</option>`).join('')}</select></div>
           <button id="m-solo" class="btn primary">Solo · gegen Bots</button>
           <div class="divider">ONLINE</div>
           <button id="m-create" class="btn blue">Raum erstellen</button>
@@ -90,6 +93,7 @@ export class StartMenu {
     const q = <T extends HTMLElement>(s: string) => this.el.querySelector<T>(s)!;
     const nameEl = q<HTMLInputElement>('#m-name');
     const modeEl = q<HTMLSelectElement>('#m-mode');
+    const roundsEl = q<HTMLSelectElement>('#m-rounds');
     const codeEl = q<HTMLInputElement>('#m-code');
     const errEl = q<HTMLDivElement>('#m-error');
     const btns = [q<HTMLButtonElement>('#m-solo'), q<HTMLButtonElement>('#m-create'), q<HTMLButtonElement>('#m-join')];
@@ -98,6 +102,7 @@ export class StartMenu {
       const name = nameEl.value.trim() || 'Kommandant';
       localStorage.setItem('tw_name', nameEl.value.trim());
       localStorage.setItem('tw_mode2', modeEl.value);
+      localStorage.setItem('tw_rounds', roundsEl.value);
       return name;
     };
     const busy = (b: boolean, msg = '') => {
@@ -111,14 +116,14 @@ export class StartMenu {
     btns[0].addEventListener('click', () => {
       const name = prefs();
       this.hide();
-      this.cb.onSolo(name, modeEl.value as GameMode);
+      this.cb.onSolo(name, modeEl.value as GameMode, Number(roundsEl.value));
     });
 
     btns[1].addEventListener('click', async () => {
       const name = prefs();
       busy(true, 'Raum wird erstellt…');
       try {
-        const host = await this.cb.onCreate(name, modeEl.value as GameMode);
+        const host = await this.cb.onCreate(name, modeEl.value as GameMode, Number(roundsEl.value));
         this.renderLobby(host.code, true, host.players);
       } catch (e) {
         busy(false);

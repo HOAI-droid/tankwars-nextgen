@@ -174,6 +174,20 @@ const shop = new ShopOverlay(
   }
 );
 
+let lastHostTotal = 6;
+function restartMatch(): void {
+  shop.hide();
+  if (role === 'solo') {
+    const me = getMyTank();
+    sim.setupMatch(fillWithBots([{ id: 'p1', name: me?.name || 'Du', color: PLAYER_COLORS[0] }], 5));
+  } else if (role === 'host') {
+    sim.setupMatch(fillWithBots((session as HostSession).players, lastHostTotal));
+    netDirty = true;
+    netTerrain = true;
+  }
+  afterNewRound(true);
+}
+
 function leaveToMenu(): void {
   session?.close();
   session = null;
@@ -183,7 +197,8 @@ function leaveToMenu(): void {
 }
 
 const menu = new StartMenu({
-  onSolo: (name, mode) => {
+  onSolo: (name, mode, rounds) => {
+    sim.totalRounds = rounds;
     role = 'solo';
     myTankId = 'p1';
     sim.mode = mode;
@@ -196,7 +211,8 @@ const menu = new StartMenu({
     afterNewRound(true);
   },
 
-  onCreate: async (name, mode) => {
+  onCreate: async (name, mode, rounds) => {
+    sim.totalRounds = rounds;
     const host = new HostSession(name, mode, {
       onPlayers: (p) => menu.setPlayers(p),
       onShoot: (pid, cmd) => {
@@ -251,6 +267,7 @@ const menu = new StartMenu({
   },
 
   onHostStart: (total) => {
+    lastHostTotal = total;
     const host = session as HostSession;
     host.started = true;
     role = 'host';
@@ -316,6 +333,7 @@ function applySnapshot(snap: ReturnType<GameSimulation['getSnapshot']>): void {
   const keep = mine ? { angle: mine.angle, power: mine.power, w: mine.selectedWeapon } : null;
 
   sim.mode = snap.mode;
+  if (snap.totalRounds) sim.totalRounds = snap.totalRounds;
   sim.phase = snap.phase;
   sim.round = snap.round;
   sim.wind = snap.wind;
@@ -680,7 +698,7 @@ function updateHud(): void {
   const me = getMyTank();
   const active = sim.tanks[sim.activeTankIndex];
 
-  roundLabel.textContent = `RUNDE ${sim.round}`;
+  roundLabel.textContent = sim.totalRounds > 1 ? `RUNDE ${sim.round}/${sim.totalRounds}` : `RUNDE ${sim.round}`;
   const w = Math.round(sim.wind);
   windVal.textContent = `WIND ${Math.abs(w)}`;
   windL.classList.toggle('on', w < -2);
@@ -722,7 +740,14 @@ function uiTick(): void {
       shopTimer = window.setTimeout(() => {
         const me = getMyTank();
         if (me && sim.phase === 'GAME_OVER' && sim.round === round) {
-          shop.show(me, { round, canAdvance: role !== 'client', standings: sim.tanks });
+          if (round >= sim.totalRounds) {
+            shop.showFinal(sim.tanks, role !== 'client', restartMatch, () => {
+              leaveToMenu();
+              menu.showMain();
+            });
+          } else {
+            shop.show(me, { round, canAdvance: role !== 'client', standings: sim.tanks });
+          }
         }
       }, 2300);
     } else if (lastPhase === 'GAME_OVER') {
