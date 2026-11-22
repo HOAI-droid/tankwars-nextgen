@@ -1437,6 +1437,7 @@ export class DioramaRenderer {
         this.projMeshes.set(p.id, v);
       }
       v.mesh.position.set(p.x, p.y, 0);
+      v.mesh.visible = sim.options.ballVisible;
       v.mesh.rotation.z = Math.atan2(p.vy, p.vx);
       // Spur lückenlos entlang des zurückgelegten Wegs legen (auch bei niedriger Bildrate)
       const lx = v.lastX ?? p.x, ly = v.lastY ?? p.y;
@@ -1453,6 +1454,7 @@ export class DioramaRenderer {
       v.lastX = p.x;
       v.lastY = p.y;
 
+      if (!sim.options.trailVisible) continue;
       // dauerhafte Flugbahn
       let tr = this.trails.get(p.id);
       if (!tr) {

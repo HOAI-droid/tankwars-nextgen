@@ -74,7 +74,7 @@ export function computeBotShot(
     tankId: bot.id,
     angle: Math.max(5, Math.min(175, Math.round(angle))),
     power: Math.max(MIN_POWER, Math.min(MAX_POWER, Math.round(power))),
-    weaponId: bot.inventory.MISSILE > 0 && Math.random() < 0.35 ? 'MISSILE' : 'BABY_MISSILE',
+    weaponId: pickWeapon(bot),
   };
 }
 
@@ -107,4 +107,13 @@ function estimatePower(dist: number, dy: number, angleDeg: number, effectiveWind
     }
   }
   return bestPower;
+}
+
+
+const BOT_WEAPONS = ['MISSILE', 'MARK_II', 'NUKE', 'NUKE_5M', 'MIRV', 'CRI_S', 'CRI_D', 'CRI_ND', 'GUIDED_H', 'GUIDED_V'] as const;
+
+function pickWeapon(bot: Tank) {
+  const owned = BOT_WEAPONS.filter((w) => (bot.inventory[w] ?? 0) > 0);
+  if (owned.length && Math.random() < 0.55) return owned[Math.floor(Math.random() * owned.length)];
+  return 'BABY_MISSILE' as const;
 }

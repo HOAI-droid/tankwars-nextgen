@@ -545,3 +545,62 @@ body.vga #sys-buttons { margin-left: auto; }
   .shop-foot .btn { min-width: 160px !important; }
 }
 body.vga #hud-top { top: calc(28 / 320 * 100vw + 6px) !important; }
+
+/* ======================= Neue Menüführung (wie im Original) ======================= */
+.menu-wrap.single { grid-template-columns: 1fr !important; justify-items: center; max-width: 760px; }
+.card.wide { width: min(720px, 100%); }
+.mrow { display: grid; grid-template-columns: 1fr auto minmax(86px, auto) auto; align-items: center; gap: 6px; padding: 7px 10px; background: rgba(255,255,255,.06); border: 1px solid var(--line); border-radius: 9px; cursor: pointer; }
+.mrow.focus, .btn.focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+.mrow .ml { font-size: 12px; letter-spacing: 1px; color: var(--dim); font-weight: 700; text-transform: uppercase; }
+.mrow .mv { text-align: center; font-weight: 700; color: var(--accent2); font-size: 14px; }
+.arr { background: rgba(255,255,255,.1); color: #fff; border: 1px solid var(--line); border-radius: 7px; width: 34px; height: 30px; cursor: pointer; font-size: 12px; }
+.arr:active { background: var(--accent); color: #000; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 12px; }
+.slots { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 8px; max-height: 52vh; overflow-y: auto; touch-action: pan-y; }
+.slot { padding: 8px 10px; background: rgba(255,255,255,.06); border: 1px solid var(--line); border-left: 4px solid var(--c); border-radius: 9px; display: flex; flex-direction: column; gap: 6px; }
+.slot-h { display: flex; align-items: center; gap: 8px; font-size: 12px; letter-spacing: 1px; }
+.slot-h i { width: 10px; height: 10px; background: var(--c); transform: rotate(45deg); }
+.seg { display: flex; gap: 0; }
+.seg button { flex: 1; padding: 7px 4px; font-size: 11px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; background: rgba(255,255,255,.07); color: var(--dim); border: 1px solid var(--line); cursor: pointer; }
+.seg button:first-child { border-radius: 7px 0 0 7px; } .seg button:last-child { border-radius: 0 7px 7px 0; }
+.seg button.on { background: var(--accent); color: #1a0c02; }
+.buildid { text-align: right; opacity: .5; font-size: 10px; }
+.row .input.code-input { flex: 1.1; }
+
+@media (max-height: 560px) {
+  .mrow { padding: 3px 8px; } .mrow .ml { font-size: 10px; } .mrow .mv { font-size: 12px; }
+  .arr { width: 28px; height: 24px; }
+  .slots { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); max-height: 66vh; gap: 5px; }
+  .slot { padding: 4px 6px; gap: 3px; } .seg button { padding: 4px 2px; font-size: 9px; }
+  .grid2 { gap: 3px 8px; }
+}
+
+/* ======================= DOS-Look (Original) ======================= */
+body.vga .screen { background: linear-gradient(180deg, #0000b8 0%, #5000a8 60%, #9000a0 100%); backdrop-filter: none; font-family: 'Press Start 2P', monospace; }
+body.vga .screen, body.vga .screen * { font-family: 'Press Start 2P', monospace !important; letter-spacing: 0 !important; border-radius: 0 !important; text-shadow: none !important; }
+body.vga .logo { text-align: center !important; }
+body.vga .logo .pre, body.vga .logo p { display: none; }
+body.vga .logo h1 { margin: 0; padding: 10px 6px; font-size: clamp(16px, 4.6vw, 34px) !important; line-height: 1.2; color: #ffff55 !important; background: #a8a8a8; border: 3px solid; border-color: #eee #555 #555 #eee; }
+body.vga .logo h1 em { display: inline; background: none; -webkit-text-fill-color: #ff5555; color: #ff5555; }
+body.vga .logo h1::after { content: ' 25'; }
+body.vga .card { background: transparent !important; box-shadow: none !important; padding: 6px !important; gap: 6px !important; }
+body.vga .card h2 { color: #ffffff; background: #a8a8a8; border: 3px solid; border-color: #eee #555 #555 #eee; padding: 7px; text-align: center; font-size: 10px; color: #0000a8; }
+body.vga .btn, body.vga .mrow, body.vga .slot, body.vga .seg button, body.vga .arr, body.vga .item, body.vga .res, body.vga .pitem {
+  background: #2828c0 !important; color: #55ff55 !important; border: 3px solid !important; border-color: #ddd #555 #555 #ddd !important; box-shadow: none !important; clip-path: none !important;
+}
+body.vga .btn { font-size: 10px !important; padding: 9px 6px !important; text-align: center; }
+body.vga .btn.primary { background: #a000a0 !important; color: #ffff55 !important; font-size: 13px !important; }
+body.vga .btn.ghost, body.vga .btn.blue, body.vga .btn.green { color: #55ffff !important; }
+body.vga .mrow .ml { color: #55ff55; font-size: 9px; } body.vga .mrow .mv { color: #ffff55; font-size: 10px; }
+body.vga .arr { width: 26px; padding: 0; color: #fff !important; }
+body.vga .mrow.focus, body.vga .btn.focus { outline: none; background: #5050ff !important; }
+body.vga .mrow.focus::before, body.vga .btn.focus::before { content: '*'; color: #ffff55; position: absolute; margin-left: -12px; }
+body.vga .input, body.vga .card select { background: #000 !important; color: #ffff55 !important; border: 2px solid #aaa !important; font-size: 10px !important; padding: 7px !important; }
+body.vga .slot { border-left: 3px solid var(--c) !important; border-color: #ddd #555 #555 var(--c) !important; }
+body.vga .seg button.on { background: #00a000 !important; color: #fff !important; }
+body.vga .code-big { color: #ffff55; font-size: 32px !important; }
+body.vga .divider { color: #aaaaaa; }
+body.vga .hint, body.vga .err, body.vga .buildid { color: #aaaaaa; }
+body.vga .shop-head h2, body.vga .cash { color: #ffff55 !important; font-size: 18px !important; }
+body.vga #shop { background: linear-gradient(180deg, #0000b8, #9000a0); }
+body.vga .item .p { color: #ffff55 !important; } body.vga .item .d, body.vga .item .f { color: #cccccc !important; }

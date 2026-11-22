@@ -12,3 +12,30 @@ export function rollWind(): number {
   if (Math.random() < 0.07) return dir * Math.round(100 + Math.random() * 700);
   return dir * Math.round(Math.random() * 100);
 }
+
+/** Spieloptionen wie im Original-Menü ("Game Options"). */
+export interface GameOptions {
+  crumblePct: number; // 0-100: wie oft loses Erdreich nachrutscht
+  rebound: 0 | 1 | 2; // 0 = Nein, 1 = Ja, 2 = Zufall (RND)
+  trailVisible: boolean;
+  ballVisible: boolean;
+  tanksFall: boolean;
+  explosionsKill: boolean;
+  computerBuy: boolean;
+  background: number; // -1 = Zufall, sonst 0-4
+  windForce: 0 | 1 | 2 | 3; // None / Low / Norm / High
+}
+
+export const DEFAULT_OPTIONS: GameOptions = {
+  crumblePct: 50,
+  rebound: 2,
+  trailVisible: true,
+  ballVisible: true,
+  tanksFall: true,
+  explosionsKill: true,
+  computerBuy: true,
+  background: -1,
+  windForce: 2,
+};
+
+export const WIND_SCALE = [0, 0.5, 1, 2];

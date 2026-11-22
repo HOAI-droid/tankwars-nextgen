@@ -1,6 +1,7 @@
 import '@fontsource/chakra-petch/500.css';
 import '@fontsource/chakra-petch/700.css';
 import '@fontsource/black-ops-one/400.css';
+import '@fontsource/press-start-2p/400.css';
 import './style.css';
 import {
   BeamEvent,
@@ -16,7 +17,7 @@ import {
   WIND_ACCEL,
 } from '@tankwars/shared';
 import { SoundEngine } from './audio.js';
-import { StartMenu } from './menu.js';
+import { LocalSetup, StartMenu } from './menu.js';
 import { ClientSession, HostSession, LobbyPlayer, PLAYER_COLORS, Session } from './network.js';
 import { DioramaRenderer } from './renderers/DioramaRenderer.js';
 import { RetroRenderer } from './renderers/RetroRenderer.js';
@@ -142,6 +143,51 @@ function fillWithBots(
   return list;
 }
 
+let lastSetup: LocalSetup | null = null;
+const ALL_BOTS: BotDifficulty[] = ['MR_STUPID', 'LOBBER', 'RIFLEMAN', 'LOB_SHOOT', 'WINDLESS_WIT', 'TWANGER'];
+const BOT_DISPLAY: Record<string, string> = {
+  MR_STUPID: 'Mr. Stupid', LOBBER: 'Lobber', RIFLEMAN: 'Rifleman', LOB_SHOOT: 'Lob & Shoot', WINDLESS_WIT: 'Windless Wit', TWANGER: 'Twanger', WINDMASTER: 'Windmaster',
+};
+
+function participantsFromSetup(setup: LocalSetup): Array<{ id: string; name: string; color: string; isBot: boolean; botType?: BotDifficulty }> {
+  const used = new Map<string, number>();
+  return setup.slots.map((sl, i) => {
+    const color = PLAYER_COLORS[i % PLAYER_COLORS.length];
+    if (sl.human) return { id: `h${i}`, name: sl.name.trim() || `Spieler ${i + 1}`, color, isBot: false };
+    const botType = (sl.bot === 'RANDOM' ? ALL_BOTS[Math.floor(Math.random() * ALL_BOTS.length)] : sl.bot) as BotDifficulty;
+    const base = BOT_DISPLAY[botType] ?? botType;
+    const n = (used.get(base) ?? 0) + 1;
+    used.set(base, n);
+    return { id: `c${i}`, name: n > 1 ? `${base} ${n}` : base, color, isBot: true, botType };
+  });
+}
+
+function startLocalMatch(setup: LocalSetup): void {
+  lastSetup = setup;
+  sim.options = { ...setup.options };
+  sim.totalRounds = setup.rounds;
+  sim.mode = setup.mode;
+  role = 'solo';
+  const parts = participantsFromSetup(setup);
+  sim.setupMatch(parts);
+  myTankId = parts.find((p) => !p.isBot)?.id ?? 'none';
+  btnMode.classList.add('hidden');
+  setInMenu(false);
+  afterNewRound(true);
+}
+
+function setGfx(retroOn: boolean): void {
+  isRetro = retroOn;
+  audio.retroMode = isRetro;
+  dioramaCanvas.classList.toggle('hidden', isRetro);
+  retroCanvas.classList.toggle('hidden', !isRetro);
+  crtOverlay.classList.toggle('hidden', !isRetro);
+  btnRetro.classList.toggle('active', isRetro);
+  document.body.classList.toggle('vga', isRetro);
+  plateLayer.style.visibility = isRetro ? 'hidden' : '';
+  menu?.refresh();
+}
+
 function resetAimFromTank(): void {
   const me = getMyTank();
   if (!me) return;
@@ -155,18 +201,28 @@ function resetAimFromTank(): void {
 /* Menü & Spielstart                                                   */
 /* ------------------------------------------------------------------ */
 
+let shopTankId = '';
+let shopQueue: string[] = [];
 const shop = new ShopOverlay(
   (itemId: ShopItemId) => {
     if (role === 'client') {
       (session as ClientSession).buyItem(itemId);
-    } else if (sim.buyItem(myTankId, itemId)) {
+    } else if (sim.buyItem(shopTankId || myTankId, itemId)) {
       netDirty = true;
-      const me = getMyTank();
+      const me = sim.tanks.find((t) => t.id === (shopTankId || myTankId));
       if (me) shop.refresh(me);
     }
   },
   () => {
     if (role === 'client') return;
+    if (shopQueue.length > 0) {
+      shopTankId = shopQueue.shift()!;
+      const t = sim.tanks.find((x) => x.id === shopTankId);
+      if (t) {
+        shop.show(t, { round: sim.round, canAdvance: true, standings: sim.tanks, nextLabel: shopQueue.length ? 'Nächster Spieler' : undefined });
+        return;
+      }
+    }
     shop.hide();
     sim.startNextRound();
     netDirty = true;
@@ -179,8 +235,8 @@ let lastHostTotal = 6;
 function restartMatch(): void {
   shop.hide();
   if (role === 'solo') {
-    const me = getMyTank();
-    sim.setupMatch(fillWithBots([{ id: 'p1', name: me?.name || 'Du', color: PLAYER_COLORS[0] }], 5));
+    if (lastSetup) startLocalMatch(lastSetup);
+    return;
   } else if (role === 'host') {
     sim.setupMatch(fillWithBots((session as HostSession).players, lastHostTotal));
     netDirty = true;
@@ -197,23 +253,19 @@ function leaveToMenu(): void {
   startDemo();
 }
 
-const menu = new StartMenu({
-  onSolo: (name, mode, rounds) => {
-    sim.totalRounds = rounds;
-    role = 'solo';
-    myTankId = 'p1';
-    sim.mode = mode;
-    sim.setupMatch(
-      fillWithBots([{ id: 'p1', name, color: PLAYER_COLORS[0] }], 5).map((p) => p)
-    );
-    btnMode.classList.remove('hidden');
-    updateModeButton();
-    setInMenu(false);
-    afterNewRound(true);
+let menu: StartMenu;
+menu = new StartMenu({
+  onStart: (setup) => startLocalMatch(setup),
+  onSound: (effects) => {
+    audio.muted = !effects;
+    btnSound.classList.toggle('off', audio.muted);
   },
+  onGfx: (retroOn) => setGfx(retroOn),
+  isRetro: () => isRetro,
 
-  onCreate: async (name, mode, rounds) => {
+  onCreate: async (name, mode, rounds, options) => {
     sim.totalRounds = rounds;
+    sim.options = { ...options };
     const host = new HostSession(name, mode, {
       onPlayers: (p) => menu.setPlayers(p),
       onShoot: (pid, cmd) => {
@@ -350,6 +402,7 @@ function applySnapshot(snap: ReturnType<GameSimulation['getSnapshot']>): void {
   if (snap.beams?.length) triggerBeams(snap.beams);
 
   if (snap.theme) sim.terrain.theme = snap.theme;
+  if (snap.options) sim.options = snap.options;
   if (snap.terrain) {
     const H = sim.terrain.heights;
     const full = snap.round !== lastSnapRound;
@@ -559,25 +612,9 @@ window.addEventListener('resize', () => {
 function updateModeButton(): void {
   btnMode.textContent = sim.mode === 'SIMULTANEOUS' ? 'SIMULTAN' : 'REIHUM';
 }
-btnMode.addEventListener('click', () => {
-  if (role !== 'solo') return;
-  sim.mode = sim.mode === 'SIMULTANEOUS' ? 'CLASSIC' : 'SIMULTANEOUS';
-  const me = getMyTank();
-  sim.setupMatch(fillWithBots([{ id: 'p1', name: me?.name || 'Du', color: PLAYER_COLORS[0] }], 5));
-  updateModeButton();
-  afterNewRound(true);
-});
+btnMode.addEventListener('click', () => undefined);
 
-btnRetro.addEventListener('click', () => {
-  isRetro = !isRetro;
-  audio.retroMode = isRetro;
-  dioramaCanvas.classList.toggle('hidden', isRetro);
-  retroCanvas.classList.toggle('hidden', !isRetro);
-  crtOverlay.classList.toggle('hidden', !isRetro);
-  btnRetro.classList.toggle('active', isRetro);
-  document.body.classList.toggle('vga', isRetro);
-  plateLayer.style.visibility = isRetro ? 'hidden' : '';
-});
+btnRetro.addEventListener('click', () => setGfx(!isRetro));
 btnSound.addEventListener('click', () => {
   audio.muted = !audio.muted;
   btnSound.classList.toggle('off', audio.muted);
@@ -732,6 +769,17 @@ function updateHud(): void {
 function uiTick(): void {
   if (role === 'demo') return;
 
+  // Mehrere Menschen am selben Gerät: im Reihum-Modus übernimmt der aktive Spieler die Steuerung
+  if (role === 'solo' && sim.mode === 'CLASSIC' && sim.phase === 'PLANNING') {
+    const act = sim.tanks[sim.activeTankIndex];
+    if (act && !act.isBot && act.id !== myTankId) {
+      myTankId = act.id;
+      resetAimFromTank();
+      weaponSig = '';
+    }
+  }
+
+
   // Phasenwechsel erkennen (läuft für Solo, Host und Client gleich)
   if (sim.phase !== lastPhase) {
     if (sim.phase === 'GAME_OVER') {
@@ -747,7 +795,17 @@ function uiTick(): void {
               menu.showMain();
             });
           } else {
-            shop.show(me, { round, canAdvance: role !== 'client', standings: sim.tanks });
+            let target = me;
+            shopQueue = [];
+            if (role === 'solo') {
+              const humans = sim.tanks.filter((t) => !t.isBot);
+              if (humans.length > 1) {
+                target = humans[0];
+                shopQueue = humans.slice(1).map((h) => h.id);
+              }
+            }
+            shopTankId = target.id;
+            shop.show(target, { round, canAdvance: role !== 'client', standings: sim.tanks, nextLabel: shopQueue.length ? 'Nächster Spieler' : undefined });
           }
         }
       }, 2300);

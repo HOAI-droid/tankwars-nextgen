@@ -13,7 +13,7 @@ import {
 import { DEFENSE_ITEMS, INITIAL_INVENTORY, ShopItemId, WEAPONS } from './weapons.js';
 
 export const GRAVITY = 280;
-import { DEFAULT_POWER, MAX_POWER, MIN_POWER, POWER_TO_SPEED, WIND_ACCEL, rollWind } from './physics.js';
+import { DEFAULT_OPTIONS, GameOptions, WIND_SCALE, DEFAULT_POWER, MAX_POWER, MIN_POWER, POWER_TO_SPEED, WIND_ACCEL, rollWind } from './physics.js';
 
 
 export class GameSimulation {
@@ -29,6 +29,7 @@ export class GameSimulation {
   public phase: TurnPhase = 'PLANNING';
   public activeTankIndex = 0;
   public wind = 0;
+  public options: GameOptions = { ...DEFAULT_OPTIONS };
   public round = 1;
   public totalRounds = 10;
 
@@ -48,7 +49,7 @@ export class GameSimulation {
   ): void {
     this.round = 1;
     this.terrain = new Terrain(Math.random() * 9999);
-    this.wind = rollWind();
+    this.applyOptions();
     this.projectiles = [];
     this.pendingShots.clear();
 
@@ -84,6 +85,29 @@ export class GameSimulation {
 
     this.activeTankIndex = Math.floor(Math.random() * this.tanks.length);
     this.phase = 'PLANNING';
+  }
+
+  /** Wind, Wände und Kulisse nach den Menüoptionen festlegen (wird bei jeder neuen Welt aufgerufen). */
+  public applyOptions(): void {
+    const o = this.options;
+    const th = this.terrain.theme;
+    if (o.rebound !== 2) th.rebound = o.rebound === 1;
+    if (o.background >= 0) th.bg = o.background;
+    this.wind = Math.round(rollWind() * WIND_SCALE[o.windForce]);
+  }
+
+  /** Computer kaufen nach jeder Runde Waffen (Option "Computers Can Buy"). */
+  private botShopping(): void {
+    if (!this.options.computerBuy) return;
+    const ids = (Object.keys(WEAPONS) as Array<keyof typeof WEAPONS>).filter((id) => WEAPONS[id].price > 0 && id !== 'LASER');
+    for (const t of this.tanks) {
+      if (!t.isBot) continue;
+      for (let i = 0; i < 4; i++) {
+        const aff = ids.filter((id) => WEAPONS[id].price <= t.money);
+        if (!aff.length) break;
+        this.buyItem(t.id, aff[Math.floor(Math.random() * aff.length)]);
+      }
+    }
   }
 
   public submitShot(cmd: ShotCommand): boolean {
@@ -296,7 +320,9 @@ export class GameSimulation {
     for (const tank of this.tanks) {
       if (!tank.alive) continue;
       const groundY = this.terrain.getHeight(tank.x);
-      if (tank.y > groundY + 0.5) {
+      if (tank.y > groundY + 0.5 && !tank.dropping && !this.options.tanksFall) {
+        // Panzer schweben (Option "Tanks Fall" = Nein)
+      } else if (tank.y > groundY + 0.5) {
         if (!tank.dropping) anyFalling = true;
         const fallSpeed = tank.dropping ? 260 : tank.parachutes > 0 ? 45 : 160;
         const drop = Math.min(tank.y - groundY, fallSpeed * dt);
@@ -356,7 +382,7 @@ export class GameSimulation {
       }
     }
 
-    this.crumbling = true;
+    if (Math.random() * 100 < this.options.crumblePct) this.crumbling = true;
     this.recentExplosions.push({
       x: p.x,
       y: p.y,
@@ -449,9 +475,10 @@ export class GameSimulation {
   }
 
   public startNextRound(): void {
+    this.botShopping();
     this.round += 1;
     this.terrain = new Terrain(Math.random() * 9999);
-    this.wind = rollWind();
+    this.applyOptions();
     this.projectiles = [];
     this.pendingShots.clear();
 
@@ -491,6 +518,7 @@ export class GameSimulation {
       beams: this.recentBeams,
       terrain: includeTerrain ? Array.from(this.terrain.heights) : undefined,
       theme: this.terrain.theme,
+      options: this.options,
     };
   }
 }

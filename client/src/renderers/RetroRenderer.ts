@@ -129,7 +129,7 @@ export class RetroRenderer {
       }
       tr.pts.push([p.x, p.y]);
     }
-    for (const tr of this.trails.values()) {
+    for (const tr of sim.options.trailVisible ? this.trails.values() : []) {
       ctx.fillStyle = tr.color;
       let lx = -1, ly = -1;
       for (const [wx, wy] of tr.pts) {
@@ -169,7 +169,7 @@ export class RetroRenderer {
     }
 
     ctx.fillStyle = '#ffffff';
-    for (const p of sim.projectiles) ctx.fillRect(Math.round(X(p.x)) - 1, Math.round(Y(p.y)) - 1, 2, 2);
+    for (const p of sim.options.ballVisible ? sim.projectiles : []) ctx.fillRect(Math.round(X(p.x)) - 1, Math.round(Y(p.y)) - 1, 2, 2);
 
     for (const b of this.beams) {
       b.life -= dt;

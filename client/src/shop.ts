@@ -25,6 +25,7 @@ export interface ShopContext {
   round: number;
   canAdvance: boolean;
   standings: Tank[];
+  nextLabel?: string;
 }
 
 export class ShopOverlay {
@@ -144,7 +145,7 @@ export class ShopOverlay {
         </div>
         <div class="shop-foot">
           <span class="hint">${ctx.canAdvance ? 'Kaufe Ausrüstung und starte die nächste Runde.' : 'Der Host startet die nächste Runde…'}</span>
-          ${ctx.canAdvance ? `<button id="shop-next" class="btn primary">Nächste Runde</button>` : ''}
+          ${ctx.canAdvance ? `<button id="shop-next" class="btn primary">${ctx.nextLabel ?? 'Nächste Runde'}</button>` : ''}
         </div>
       </div>`;
 
