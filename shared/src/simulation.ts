@@ -53,12 +53,12 @@ export class GameSimulation {
     this.projectiles = [];
     this.pendingShots.clear();
 
-    const margin = 80;
+    const margin = 60;
     const step = (WORLD_WIDTH - margin * 2) / Math.max(1, players.length - 1);
 
     this.tanks = players.map((p, i) => {
       const x = Math.round(margin + i * step + (Math.random() - 0.5) * 20);
-      this.terrain.flattenPlatform(x, 14);
+      this.terrain.flattenPlatform(x, 10);
       return {
         id: p.id,
         name: p.name,
@@ -177,8 +177,8 @@ export class GameSimulation {
       ownerId: tank.id,
       weaponId,
       targetId,
-      x: tank.x + (cmd.angle <= 90 ? 34 : -34) + Math.cos(rad) * 38,
-      y: tank.y + 30 + Math.sin(rad) * 38,
+      x: tank.x + (cmd.angle <= 90 ? 21 : -21) + Math.cos(rad) * 23,
+      y: tank.y + 18 + Math.sin(rad) * 23,
       vx: Math.cos(rad) * speed,
       vy: Math.sin(rad) * speed,
       hasSplit: false,
@@ -188,8 +188,8 @@ export class GameSimulation {
 
   private fireLaser(tank: Tank, cmd: ShotCommand): void {
     const rad = (cmd.angle * Math.PI) / 180;
-    const x0 = tank.x + (cmd.angle <= 90 ? 34 : -34) + Math.cos(rad) * 38;
-    const y0 = tank.y + 30 + Math.sin(rad) * 38;
+    const x0 = tank.x + (cmd.angle <= 90 ? 21 : -21) + Math.cos(rad) * 23;
+    const y0 = tank.y + 18 + Math.sin(rad) * 23;
     const dmg = Math.round(cmd.power * 0.9);
     let x = x0, y = y0;
     const hit = new Set<string>();
@@ -199,7 +199,7 @@ export class GameSimulation {
       if (x < 0 || x >= WORLD_WIDTH || y > 900) break;
       for (const t of this.tanks) {
         if (!t.alive || t.id === tank.id || hit.has(t.id)) continue;
-        if (Math.hypot(t.x - x, t.y + 16 - y) < 22) {
+        if (Math.hypot(t.x - x, t.y + 10 - y) < 14) {
           hit.add(t.id);
           let d = dmg;
           if (t.shield > 0) { const a = Math.min(t.shield, d); t.shield -= a; d -= a; }
@@ -284,7 +284,7 @@ export class GameSimulation {
 
       const groundY = this.terrain.getHeight(p.x);
       const hitTank = this.tanks.find(
-        (t) => t.alive && Math.hypot(t.x - p.x, t.y + 22 - p.y) < 36
+        (t) => t.alive && Math.hypot(t.x - p.x, t.y + 13 - p.y) < 22
       );
 
       if (p.y <= groundY || hitTank) {
@@ -516,13 +516,13 @@ export class GameSimulation {
     this.projectiles = [];
     this.pendingShots.clear();
 
-    const margin = 80;
+    const margin = 60;
     const step = (WORLD_WIDTH - margin * 2) / Math.max(1, this.tanks.length - 1);
 
     const shuffled = [...this.tanks].sort(() => Math.random() - 0.5);
     shuffled.forEach((tank, i) => {
       const x = Math.round(margin + i * step + (Math.random() - 0.5) * 20);
-      this.terrain.flattenPlatform(x, 14);
+      this.terrain.flattenPlatform(x, 10);
       tank.x = x;
       tank.y = this.terrain.getHeight(x) + 360 + i * 25;
       tank.dropping = true;

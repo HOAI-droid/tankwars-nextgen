@@ -91,7 +91,7 @@ const TREES = 30;
 const RAIN = 900;
 const MISTS = 14;
 const TANK_SCALE = 1;
-const MS = 72;
+const MS = 44;
 const YAW = 0.5;
 const PIVOT_X = 0.54 * MS * Math.cos(YAW);
 const PIVOT_Y = 0.413 * MS;
@@ -1277,7 +1277,7 @@ export class DioramaRenderer {
       g.fillRect(0, 0, 64, 64);
       this.shadowTex = new THREE.CanvasTexture(c);
     }
-    const shadow = new THREE.Mesh(new THREE.PlaneGeometry(120, 60), new THREE.MeshBasicMaterial({ map: this.shadowTex, transparent: true, depthWrite: false, fog: false }));
+    const shadow = new THREE.Mesh(new THREE.PlaneGeometry(74, 37), new THREE.MeshBasicMaterial({ map: this.shadowTex, transparent: true, depthWrite: false, fog: false }));
     shadow.rotation.x = -Math.PI / 2;
     shadow.position.set(0, 0.8, 0);
     group.add(shadow);
@@ -1288,7 +1288,7 @@ export class DioramaRenderer {
     gun.add(barrel);
 
     const shield = new THREE.Mesh(
-      new THREE.SphereGeometry(40, 24, 16),
+      new THREE.SphereGeometry(25, 24, 16),
       new THREE.MeshBasicMaterial({
         color: new THREE.Color(0.25, 1.1, 1.7), transparent: true, opacity: 0.22, depthWrite: false,
         blending: THREE.AdditiveBlending, toneMapped: false,
@@ -1367,8 +1367,8 @@ export class DioramaRenderer {
         vis.smokeT -= dt;
         if (vis.smokeT <= 0) {
           vis.smokeT = tank.hp < 20 ? 0.05 : 0.11;
-          this.emitSmoke(tank.x - 4, tank.y + 28, 0, (Math.random() - 0.5) * 10, 28 + Math.random() * 14, (Math.random() - 0.5) * 6, 1.1, 7, 18, '#2c2c30', 0.7);
-          if (tank.hp < 20) this.emitFire(tank.x - 4, tank.y + 25, 0, (Math.random() - 0.5) * 6, 18, 0, 0.35, 8, 3, '#ff9a3a', '#ff3a10', 0.9);
+          this.emitSmoke(tank.x - 3, tank.y + 17, 0, (Math.random() - 0.5) * 10, 28 + Math.random() * 14, (Math.random() - 0.5) * 6, 1.1, 5, 14, '#2c2c30', 0.7);
+          if (tank.hp < 20) this.emitFire(tank.x - 3, tank.y + 15, 0, (Math.random() - 0.5) * 6, 18, 0, 0.35, 8, 3, '#ff9a3a', '#ff3a10', 0.9);
         }
       }
     }
@@ -1603,7 +1603,7 @@ export class DioramaRenderer {
         b.sprite.visible = true;
         b.sprite.position.set(ev.x + (i ? (Math.random() - 0.5) * R : 0), ev.y + 6 + (i ? Math.random() * R * 0.5 : 0), 22 + i * 5);
         b.life = b.maxLife = 0.75 + Math.random() * 0.35 + (big ? 0.5 : 0);
-        b.size = R * (i ? 3.0 : 4.2) * (big ? 1.2 : 1);
+        b.size = R * (i ? 2.0 : 2.7) * (big ? 1.15 : 1);
         b.spin = (Math.random() - 0.5) * 0.9;
         b.sprite.material.rotation = Math.random() * 6.28;
       }
@@ -1619,7 +1619,7 @@ export class DioramaRenderer {
         );
       }
       // Funkenregen
-      const ns = Math.min(110, Math.floor(R * 1.6) + 20);
+      const ns = Math.min(110, Math.round(R * 0.6));
       for (let i = 0; i < ns; i++) {
         const a = Math.random() * Math.PI;
         const sp = (0.3 + Math.random() * 1.1) * R * 4.6;
@@ -1628,7 +1628,7 @@ export class DioramaRenderer {
     }
 
     // dunkler Rauch (schwere, langsam aufsteigende Wolken)
-    const sn = Math.min(70, Math.floor(R * 0.9) + 8);
+    const sn = Math.min(60, Math.floor(R * 0.6) + 6);
     for (let i = 0; i < sn; i++) {
       const a = Math.random() * Math.PI * 2;
       const sp = (0.1 + Math.random() * 0.6) * R * 1.6;
@@ -1641,7 +1641,28 @@ export class DioramaRenderer {
     }
 
     // Trümmer: große Felsbrocken und Erdklumpen, anfangs glühend
-    const dn = Math.min(90, Math.floor(R * 1.3));
+    if (ev.weaponId === 'DRILL' && this.terrainRef) {
+      const gy = this.terrainRef.getHeight(ev.x);
+      let c = 0;
+      for (let i = 0; i < MAX_DEBRIS && c < 64; i++) {
+        const dd = this.debris[i];
+        if (dd.active) continue;
+        dd.active = true;
+        dd.x = ev.x + (Math.random() - 0.5) * 14; dd.y = gy; dd.z = (Math.random() - 0.5) * 20;
+        const ang = ((75 + Math.random() * 30) * Math.PI) / 180;
+        const sp = 280 + Math.random() * 190;
+        dd.vx = Math.cos(ang) * sp; dd.vy = Math.sin(ang) * sp; dd.vz = (Math.random() - 0.5) * 40;
+        dd.life = 1.6 + Math.random() * 1.2;
+        dd.s = 1.6 + Math.pow(Math.random(), 2) * 5;
+        dd.rx = Math.random() * 12; dd.ry = Math.random() * 12;
+        dd.color.set(Math.random() < 0.6 ? '#5a4030' : '#4a4a4a');
+        this.debrisMesh.setColorAt(i, dd.color);
+        c++;
+      }
+      for (let i = 0; i < 14; i++) this.emitSmoke(ev.x + (Math.random() - 0.5) * 12, gy + i * 12, 0, (Math.random() - 0.5) * 10, 40 + Math.random() * 40, 0, 1.6 + Math.random(), 8, 24, '#4a4036', 0.75);
+      if (this.debrisMesh.instanceColor) this.debrisMesh.instanceColor.needsUpdate = true;
+    }
+    const dn = Math.max(22, Math.min(80, Math.round(R * 0.75)));
     let k = 0;
     for (let i = 0; i < MAX_DEBRIS && k < dn; i++) {
       const d = this.debris[i];

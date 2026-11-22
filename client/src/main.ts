@@ -553,7 +553,7 @@ function canAim(): boolean {
 function applyDrag(e: PointerEvent): void {
   const me = getMyTank();
   if (!me) return;
-  const sp = diorama.project(me.x, me.y + 30);
+  const sp = diorama.project(me.x, me.y + 18);
   const dx = sp.x - e.clientX;
   const dy = e.clientY - sp.y;
   let deg = (Math.atan2(dy, dx) * 180) / Math.PI;
@@ -675,7 +675,7 @@ function updateWorldUi(): void {
   for (const t of sim.tanks) {
     const prev = prevHp.get(t.id);
     if (prev !== undefined && t.hp < prev - 0.5 && !isRetro) {
-      const p = diorama.project(t.x, t.y + 108);
+      const p = diorama.project(t.x, t.y + 64);
       spawnFloater(`-${Math.round(prev - t.hp)}`, p.x, p.y);
     }
     prevHp.set(t.id, t.hp);
@@ -695,7 +695,7 @@ function updateWorldUi(): void {
     el.className = `plate${t.id === myTankId ? ' me' : ''}${t.ready ? ' ready' : ''}`;
     el.style.display = t.alive ? '' : 'none';
     if (!t.alive || isRetro) continue;
-    const p = diorama.project(t.x, t.y + 90);
+    const p = diorama.project(t.x, t.y + 54);
     el.style.left = `${p.x}px`;
     el.style.top = `${p.y}px`;
     const nm = el.firstElementChild as HTMLElement;

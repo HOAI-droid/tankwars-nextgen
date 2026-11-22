@@ -146,7 +146,7 @@ export class RetroRenderer {
       if (!tank.alive) continue;
       const tx = Math.round(X(tank.x));
       const ty = Math.round(Y(tank.y));
-      const w = Math.max(9, Math.round(map.ax * k * 62));
+      const w = Math.max(9, Math.round(map.ax * k * 38));
       const h = Math.max(3, Math.round(w * 0.28));
       ctx.fillStyle = tank.color;
       ctx.fillRect(tx - w / 2, ty - h, w, h);
@@ -154,12 +154,12 @@ export class RetroRenderer {
       ctx.fillStyle = '#ffffff';
       const side = tank.angle <= 90 ? 1 : -1;
       const rad = (tank.angle * Math.PI) / 180;
-      const px0 = tank.x + side * 34, py0 = tank.y + 30;
+      const px0 = tank.x + side * 21, py0 = tank.y + 18;
       ctx.strokeStyle = tank.color;
       ctx.lineWidth = 2;
       ctx.beginPath();
       ctx.moveTo(X(px0), Y(py0));
-      ctx.lineTo(X(px0 + Math.cos(rad) * 40), Y(py0 + Math.sin(rad) * 40));
+      ctx.lineTo(X(px0 + Math.cos(rad) * 24), Y(py0 + Math.sin(rad) * 24));
       ctx.stroke();
       if (tank.shield > 0) {
         ctx.strokeStyle = '#55ffff';
