@@ -9,7 +9,18 @@ export type WeaponId =
   | 'MIRV'
   | 'NUKE'
   | 'DIRT_BALL'
-  | 'HAND_GRENADE';
+  | 'HAND_GRENADE'
+  | 'LEAD_BALL'
+  | 'MARK_II'
+  | 'NUKE_5M'
+  | 'CRI_S'
+  | 'CRI_D'
+  | 'CRI_ND'
+  | 'SONIC'
+  | 'EXPLOSIVE_DIRT'
+  | 'LASER'
+  | 'GUIDED_H'
+  | 'GUIDED_V';
 
 export interface WeaponDef {
   id: WeaponId;
@@ -20,6 +31,9 @@ export interface WeaponDef {
   maxDamage: number;
   isDirt?: boolean;
   splitCount?: number;
+  kind?: 'laser' | 'cri' | 'sonic' | 'xdirt' | 'lead';
+  cri?: { n: number; fluent: boolean; r: number };
+  guide?: 'H' | 'V';
   color: string;
 }
 
@@ -57,6 +71,7 @@ export interface Projectile {
   id: string;
   ownerId: string;
   weaponId: WeaponId;
+  targetId?: string;
   x: number;
   y: number;
   vx: number;
@@ -71,4 +86,12 @@ export interface ExplosionEvent {
   radius: number;
   isDirt: boolean;
   weaponId: WeaponId;
+}
+
+export interface BeamEvent {
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+  power: number;
 }

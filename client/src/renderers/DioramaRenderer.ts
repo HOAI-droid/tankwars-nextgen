@@ -17,6 +17,7 @@ import {
   WORLD_HEIGHT,
   WORLD_WIDTH,
   WorldTheme,
+  BeamEvent,
 } from '@tankwars/shared';
 
 export interface RenderOptions {
@@ -97,7 +98,7 @@ const BARREL_SX = 1.25;
 const BARREL_LEN = 0.42 * MS * BARREL_SX;
 const MAX_DEBRIS = 260;
 const FIRE_POOL = 420;
-const SMOKE_POOL = 760;
+const SMOKE_POOL = 1800;
 const BLASTS = 14;
 const RUBBLE = 220;
 const MOTES = 140;
@@ -325,13 +326,13 @@ export class DioramaRenderer {
   private windDrift = 0;
 
   private tankVisuals = new Map<string, TankVisual>();
-  private projMeshes = new Map<string, { mesh: THREE.Group; trail: number }>();
+  private projMeshes = new Map<string, { mesh: THREE.Group; trail: number; lastX?: number; lastY?: number }>();
 
   private clouds: Cloud[] = [];
   private elapsed = 0;
 
   private fire: Fx[] = [];
-  private smoke: Fx[] = [];
+  public smoke: Fx[] = [];
   private rings: Fx[] = [];
   private debris: Debris[] = [];
   private debrisMesh: THREE.InstancedMesh;
@@ -1402,17 +1403,20 @@ export class DioramaRenderer {
       }
       v.mesh.position.set(p.x, p.y, 0);
       v.mesh.rotation.z = Math.atan2(p.vy, p.vx);
-      v.trail -= dt;
-      if (v.trail <= 0) {
-        v.trail = 0.016;
-        const dirx = p.vx / (Math.hypot(p.vx, p.vy) || 1);
-        const diry = p.vy / (Math.hypot(p.vx, p.vy) || 1);
-        const bx = p.x - dirx * 9;
-        const by = p.y - diry * 9;
-        const col = new THREE.Color(WEAPONS[p.weaponId].color).getStyle();
-        this.emitFire(bx, by, (Math.random() - 0.5) * 4, 0, 0, 0, 0.22, 7, 2, '#fff0b8', col, 0.9);
-        this.emitSmoke(bx, by, (Math.random() - 0.5) * 4, (Math.random() - 0.5) * 10, 6, 0, 0.9 + Math.random() * 0.4, 3.5, 11, '#b9b2aa', 0.4);
+      // Spur lückenlos entlang des zurückgelegten Wegs legen (auch bei niedriger Bildrate)
+      const lx = v.lastX ?? p.x, ly = v.lastY ?? p.y;
+      const dist = Math.hypot(p.x - lx, p.y - ly);
+      const n = Math.min(60, Math.max(1, Math.ceil(dist / 5)));
+      const col = new THREE.Color(WEAPONS[p.weaponId].color).getStyle();
+      for (let i = 1; i <= n; i++) {
+        const f = i / n;
+        const bx = lx + (p.x - lx) * f, by = ly + (p.y - ly) * f;
+        if (i === n) this.emitFire(bx, by, 0, 0, 0, 0, 0.16, 6, 2, '#fff0b8', col, 0.9);
+        // Kondensstreifen: dünne weiße Rauchspur, die lange stehen bleibt und langsam zerfasert
+        this.emitSmoke(bx, by, 0, this.windDrift * 0.4, 1.5, 0, 4.2 + Math.random() * 0.8, 3.2, 9, '#f2f4f7', 0.5);
       }
+      v.lastX = p.x;
+      v.lastY = p.y;
     }
   }
 
@@ -1444,6 +1448,35 @@ export class DioramaRenderer {
 
   private emitSpark(x: number, y: number, z: number, vx: number, vy: number, vz: number, life: number, size: number): void {
     this.emit(this.fire, x, y, z, vx, vy, vz, life, size, size * 0.3, '#fff0b0', '#ff4a12', 1, 0.25, -560);
+  }
+
+  private beamMeshes: Array<{ mesh: THREE.Mesh; life: number }> = [];
+
+  public spawnBeam(b: BeamEvent): void {
+    const len = Math.hypot(b.x1 - b.x0, b.y1 - b.y0);
+    const mat = new THREE.MeshBasicMaterial({ color: new THREE.Color(4, 0.5, 0.4), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false, fog: false });
+    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(len, 5 + b.power * 0.06), mat);
+    mesh.position.set((b.x0 + b.x1) / 2, (b.y0 + b.y1) / 2, 6);
+    mesh.rotation.z = Math.atan2(b.y1 - b.y0, b.x1 - b.x0);
+    this.scene.add(mesh);
+    this.beamMeshes.push({ mesh, life: 0.35 });
+    this.flashLevel = Math.max(this.flashLevel, 1.5);
+    this.flashLight.position.set(b.x1, b.y1, 40);
+    this.shakeIntensity = Math.min(26, this.shakeIntensity + 4);
+  }
+
+  private updateBeams(dt: number): void {
+    for (let i = this.beamMeshes.length - 1; i >= 0; i--) {
+      const b = this.beamMeshes[i];
+      b.life -= dt;
+      (b.mesh.material as THREE.MeshBasicMaterial).opacity = Math.max(0, b.life / 0.35);
+      if (b.life <= 0) {
+        this.scene.remove(b.mesh);
+        b.mesh.geometry.dispose();
+        (b.mesh.material as THREE.Material).dispose();
+        this.beamMeshes.splice(i, 1);
+      }
+    }
   }
 
   public spawnExplosion(ev: ExplosionEvent): void {
@@ -1691,6 +1724,7 @@ export class DioramaRenderer {
     this.syncProjectiles(sim, dt);
     this.updateAtmosphere(sim.wind, dt);
     this.updateAim(sim, opts);
+    this.updateBeams(dt);
     this.updateParticles(dt);
 
     // Kamera

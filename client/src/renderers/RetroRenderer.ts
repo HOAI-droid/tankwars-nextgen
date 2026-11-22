@@ -1,4 +1,4 @@
-import { ExplosionEvent, GameSimulation } from '@tankwars/shared';
+import { BeamEvent, ExplosionEvent, GameSimulation } from '@tankwars/shared';
 
 interface RetroBlast {
   x: number;
@@ -45,6 +45,7 @@ const SKIES: Array<Array<[number, number, number]>> = [
 export class RetroRenderer {
   private ctx: CanvasRenderingContext2D;
   private blasts: RetroBlast[] = [];
+  private beams: Array<BeamEvent & { life: number }> = [];
   private trails = new Map<string, Array<[number, number]>>();
   private W = 320;
   private H = 200;
@@ -63,6 +64,10 @@ export class RetroRenderer {
     this.canvas.width = this.W;
     this.canvas.height = this.H;
     this.ctx.imageSmoothingEnabled = false;
+  }
+
+  public spawnBeam(b: BeamEvent): void {
+    this.beams.push({ ...b, life: 0.35 });
   }
 
   public spawnExplosion(ev: ExplosionEvent): void {
@@ -164,6 +169,17 @@ export class RetroRenderer {
     ctx.fillStyle = '#ffff55';
     for (const p of sim.projectiles) ctx.fillRect(Math.round(X(p.x)) - 1, Math.round(Y(p.y)) - 1, 2, 2);
     if (sim.phase === 'PLANNING') this.trails.clear();
+
+    for (const b of this.beams) {
+      b.life -= dt;
+      ctx.strokeStyle = Math.random() < 0.5 ? '#ff4040' : '#ffffff';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(X(b.x0), Y(b.y0));
+      ctx.lineTo(X(b.x1), Y(b.y1));
+      ctx.stroke();
+    }
+    this.beams = this.beams.filter((b) => b.life > 0);
 
     // Explosionen: Farbpalette Weiß -> Gelb -> Rot
     for (const b of this.blasts) {

@@ -3,6 +3,7 @@ import '@fontsource/chakra-petch/700.css';
 import '@fontsource/black-ops-one/400.css';
 import './style.css';
 import {
+  BeamEvent,
   BotDifficulty,
   computeBotShot,
   ExplosionEvent,
@@ -280,6 +281,7 @@ let netDirty = false;
 let netTerrain = false;
 let netAcc = 0;
 let pendingExplosions: ExplosionEvent[] = [];
+let pendingBeams: BeamEvent[] = [];
 
 function hostBroadcast(dt: number): void {
   const host = session as HostSession;
@@ -296,6 +298,8 @@ function hostBroadcast(dt: number): void {
   const withTerrain = netTerrain || pendingExplosions.length > 0 || sim.phase === 'RESOLVING';
   const snap = sim.getSnapshot(withTerrain);
   snap.explosions = pendingExplosions;
+  snap.beams = pendingBeams;
+  pendingBeams = [];
   // Infinity/undefined sind nicht übertragbar -> bereinigte Kopie senden
   const wire = JSON.parse(
     JSON.stringify(snap, (_k, v) => (v === Infinity ? 9999 : v))
@@ -318,7 +322,13 @@ function applySnapshot(snap: ReturnType<GameSimulation['getSnapshot']>): void {
   sim.activeTankIndex = snap.activeTankIndex;
   sim.tanks = snap.tanks;
   sim.projectiles = snap.projectiles;
-  for (const t of sim.tanks) t.inventory.BABY_MISSILE = Infinity; // JSON kennt kein Infinity
+  for (const t of sim.tanks) {
+    // JSON kennt kein Infinity
+    t.inventory.BABY_MISSILE = Infinity;
+    t.inventory.HAND_GRENADE = Infinity;
+    t.inventory.LEAD_BALL = Infinity;
+  }
+  if (snap.beams?.length) triggerBeams(snap.beams);
 
   if (snap.theme) sim.terrain.theme = snap.theme;
   if (snap.terrain) {
@@ -563,6 +573,14 @@ btnFull.addEventListener('click', () => {
 /* Effekte & UI-Updates                                                */
 /* ------------------------------------------------------------------ */
 
+function triggerBeams(beams: BeamEvent[]): void {
+  for (const b of beams) {
+    diorama.spawnBeam(b);
+    retro.spawnBeam(b);
+    audio.playShoot();
+  }
+}
+
 function triggerExplosions(events: ExplosionEvent[]): void {
   for (const ev of events) {
     diorama.spawnExplosion(ev);
@@ -757,6 +775,10 @@ function loop(now: number): void {
         audio.playShoot();
         for (const p of sim.projectiles) diorama.kick(p.ownerId);
         netDirty = true;
+      }
+      if (sim.recentBeams.length > 0) {
+        triggerBeams(sim.recentBeams);
+        if (role === 'host') pendingBeams.push(...sim.recentBeams);
       }
       if (sim.recentExplosions.length > 0) {
         triggerExplosions(sim.recentExplosions);

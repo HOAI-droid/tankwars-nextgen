@@ -5,6 +5,7 @@ import {
   ExplosionEvent,
   GameMode,
   Projectile,
+  BeamEvent,
   ShotCommand,
   Tank,
   TurnPhase,
@@ -19,6 +20,9 @@ export class GameSimulation {
   public tanks: Tank[] = [];
   public projectiles: Projectile[] = [];
   public recentExplosions: ExplosionEvent[] = [];
+  public recentBeams: BeamEvent[] = [];
+  private pendingBeams: BeamEvent[] = [];
+  private crumbleSlope = 2.4;
 
   public mode: GameMode = 'SIMULTANEOUS';
   public phase: TurnPhase = 'PLANNING';
@@ -123,15 +127,29 @@ export class GameSimulation {
 
   private spawnProjectile(tank: Tank, cmd: ShotCommand): void {
     const weaponId = tank.inventory[cmd.weaponId] > 0 ? cmd.weaponId : 'BABY_MISSILE';
-    if (weaponId !== 'BABY_MISSILE') tank.inventory[weaponId]--;
+    if (tank.inventory[weaponId] !== Infinity) tank.inventory[weaponId]--;
 
     const rad = (cmd.angle * Math.PI) / 180;
     const speed = cmd.power * POWER_TO_SPEED;
+
+    if (WEAPONS[weaponId].kind === 'laser') {
+      this.fireLaser(tank, cmd);
+      return;
+    }
+    let targetId: string | undefined;
+    if (WEAPONS[weaponId].guide) {
+      const foes = this.tanks.filter((t) => t.alive && t.id !== tank.id);
+      foes.sort((a, b) => Math.abs(a.x - tank.x) - Math.abs(b.x - tank.x));
+      // bevorzugt den Gegner in Schussrichtung
+      const dirOK = foes.filter((t) => (cmd.angle <= 90 ? t.x > tank.x : t.x < tank.x));
+      targetId = (dirOK[0] ?? foes[0])?.id;
+    }
 
     this.projectiles.push({
       id: `p_${++this.projCounter}`,
       ownerId: tank.id,
       weaponId,
+      targetId,
       x: tank.x + (cmd.angle <= 90 ? 34 : -34) + Math.cos(rad) * 38,
       y: tank.y + 30 + Math.sin(rad) * 38,
       vx: Math.cos(rad) * speed,
@@ -141,8 +159,41 @@ export class GameSimulation {
     });
   }
 
+  private fireLaser(tank: Tank, cmd: ShotCommand): void {
+    const rad = (cmd.angle * Math.PI) / 180;
+    const x0 = tank.x + (cmd.angle <= 90 ? 34 : -34) + Math.cos(rad) * 38;
+    const y0 = tank.y + 30 + Math.sin(rad) * 38;
+    const dmg = Math.round(cmd.power * 0.9);
+    let x = x0, y = y0;
+    const hit = new Set<string>();
+    for (let i = 0; i < 700; i++) {
+      x += Math.cos(rad) * 2;
+      y += Math.sin(rad) * 2;
+      if (x < 0 || x >= WORLD_WIDTH || y > 900) break;
+      for (const t of this.tanks) {
+        if (!t.alive || t.id === tank.id || hit.has(t.id)) continue;
+        if (Math.hypot(t.x - x, t.y + 16 - y) < 22) {
+          hit.add(t.id);
+          let d = dmg;
+          if (t.shield > 0) { const a = Math.min(t.shield, d); t.shield -= a; d -= a; }
+          t.hp -= d;
+          if (t.hp <= 0) this.killTank(t, tank.id);
+        }
+      }
+      if (y <= this.terrain.getHeight(x)) {
+        this.terrain.carveCrater(x, y, 7);
+        this.recentExplosions.push({ x, y, radius: 12, isDirt: false, weaponId: 'LASER' });
+        break;
+      }
+    }
+    this.pendingBeams.push({ x0, y0, x1: x, y1: y, power: cmd.power });
+    this.crumbling = true;
+  }
+
   public step(dt: number): void {
     this.recentExplosions = [];
+    this.recentBeams = this.pendingBeams;
+    this.pendingBeams = [];
 
     // Sind keine Menschen mehr am Leben (nur noch Bots), würde das Match ewig
     // in PLANNING hängen bleiben -> Bots automatisch feuern lassen.
@@ -161,6 +212,21 @@ export class GameSimulation {
       if (!p.alive) continue;
 
       const prevVy = p.vy;
+      const gd = WEAPONS[p.weaponId].guide;
+      if (gd && p.targetId) {
+        const tg = this.tanks.find((t) => t.id === p.targetId && t.alive);
+        if (tg) {
+          if (gd === 'H') {
+            p.vx += Math.sign(tg.x - p.x) * 260 * dt;
+            p.vx *= 1 - 0.4 * dt;
+          } else if (p.vy < 0) {
+            // Sturzflug: über dem Ziel senkrecht herabstürzen
+            const dx = tg.x - p.x;
+            p.vx += Math.max(-1, Math.min(1, dx / 40)) * 520 * dt;
+            p.vx *= 1 - 3 * dt;
+          }
+        }
+      }
       p.vx += this.wind * dt;
       p.vy -= GRAVITY * dt;
       p.x += p.vx * dt;
@@ -210,7 +276,10 @@ export class GameSimulation {
 
     this.projectiles = this.projectiles.filter((p) => p.alive);
 
-    if (this.crumbling && this.terrain.crumble()) { /* Erde rutscht nach */ } else this.crumbling = false;
+    if (this.crumbling && this.terrain.crumble(this.crumbleSlope, this.crumbleSlope < 1 ? 12 : 3)) { /* Erde rutscht nach */ } else {
+      this.crumbling = false;
+      this.crumbleSlope = 2.4;
+    }
 
     let anyFalling = false;
     for (const tank of this.tanks) {
@@ -238,7 +307,22 @@ export class GameSimulation {
 
   private detonate(p: Projectile): void {
     const def = WEAPONS[p.weaponId];
-    if (def.isDirt) {
+    if (def.kind === 'sonic') {
+      this.crumbleSlope = 0.35;
+      this.crumbling = true;
+      this.recentExplosions.push({ x: p.x, y: p.y, radius: 14, isDirt: true, weaponId: p.weaponId });
+      return;
+    }
+    if (def.kind === 'lead') {
+      this.recentExplosions.push({ x: p.x, y: p.y, radius: 4, isDirt: true, weaponId: p.weaponId });
+      return;
+    }
+    if (def.kind === 'cri' && def.cri) {
+      this.chainReaction(p, def.cri);
+    } else if (def.kind === 'xdirt') {
+      this.terrain.addDirt(p.x, p.y, def.explosionRadius);
+      for (let i = 0; i < 9; i++) this.terrain.addDirt(p.x + (Math.random() - 0.5) * 140, p.y + 20 + Math.random() * 70, 14 + Math.random() * 10);
+    } else if (def.isDirt) {
       this.terrain.addDirt(p.x, p.y, def.explosionRadius);
     } else {
       this.terrain.carveCrater(p.x, p.y, def.explosionRadius);
@@ -261,7 +345,7 @@ export class GameSimulation {
       }
     }
 
-    if (!def.isDirt || true) this.crumbling = true;
+    this.crumbling = true;
     this.recentExplosions.push({
       x: p.x,
       y: p.y,
@@ -269,6 +353,28 @@ export class GameSimulation {
       isDirt: !!def.isDirt,
       weaponId: p.weaponId,
     });
+  }
+
+  /** Kettenreaktion im Boden: frisst sich zufällig durch die Oberfläche (D = breit, ND = tief). */
+  private chainReaction(p: Projectile, cri: { n: number; fluent: boolean; r: number }): void {
+    let x = p.x;
+    for (let i = 0; i < cri.n; i++) {
+      const gy = this.terrain.getHeight(x);
+      const y = cri.fluent ? gy - 2 : gy - i * 3;
+      this.terrain.carveCrater(x, y, cri.r);
+      this.recentExplosions.push({ x, y, radius: cri.r, isDirt: false, weaponId: p.weaponId });
+      for (const tank of this.tanks) {
+        if (!tank.alive) continue;
+        if (Math.hypot(tank.x - x, tank.y + 6 - y) < cri.r + 14) {
+          let d = 14;
+          if (tank.shield > 0) { const a = Math.min(tank.shield, d); tank.shield -= a; d -= a; }
+          tank.hp -= d;
+          if (tank.hp <= 0) this.killTank(tank, p.ownerId);
+        }
+      }
+      x += (cri.fluent ? (Math.random() < 0.5 ? -1 : 1) * (cri.r * 1.1) : (Math.random() - 0.5) * cri.r * 0.9);
+      x = Math.max(5, Math.min(WORLD_WIDTH - 5, x));
+    }
   }
 
   private killTank(victim: Tank, killerId?: string): void {
@@ -366,6 +472,7 @@ export class GameSimulation {
       tanks: this.tanks,
       projectiles: this.projectiles,
       explosions: this.recentExplosions,
+      beams: this.recentBeams,
       terrain: includeTerrain ? Array.from(this.terrain.heights) : undefined,
       theme: this.terrain.theme,
     };
