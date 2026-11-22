@@ -967,7 +967,9 @@ export class DioramaRenderer {
     this.composer.setSize(w, h);
     this.bloomPass.setSize(w, h);
     this.camera.aspect = w / h;
-    this.baseZ = 1060 * Math.max(1, 1.45 / this.camera.aspect);
+    // Die Spielwelt füllt immer die komplette Bildschirmbreite (kein offener Rand)
+    const halfFov = Math.tan((this.camera.fov * Math.PI) / 360);
+    this.baseZ = (WORLD_WIDTH * 1.01) / (2 * halfFov * this.camera.aspect);
     this.camera.updateProjectionMatrix();
   }
 
@@ -1810,8 +1812,9 @@ export class DioramaRenderer {
       targetZoom = 0.14 + Math.sin(this.elapsed * 0.07) * 0.04;
     } else if (sim.projectiles.length > 0) {
       const avg = sim.projectiles.reduce((s, p) => s + p.x, 0) / sim.projectiles.length;
-      targetX = cx + Math.max(-130, Math.min(130, (avg - cx) * 0.3));
-      targetZoom = 0.07;
+      void avg;
+      targetX = cx;
+      targetZoom = 0;
     }
     const k = Math.min(1, dt * 2.2);
     this.camX += (targetX - this.camX) * k;
@@ -1820,9 +1823,11 @@ export class DioramaRenderer {
     const z = this.baseZ * (1 - this.camZoom);
     const bob = Math.sin(this.elapsed * 0.35) * 1.8;
     const sway = Math.sin(this.elapsed * 0.21) * 14;
-    this.camera.position.set(this.camX + sway - 95, 440 + bob - this.camZoom * 40, z);
-    this.lookTargetY = 175 - this.camZoom * 30;
-    this.camera.lookAt(this.camX * 0.92 + cx * 0.08 - 60, 175 - this.camZoom * 30, 0);
+    void sway;
+    const camCx = opts.cinematic ? this.camX : cx;
+    this.camera.position.set(camCx, 300 + bob - this.camZoom * 40, z);
+    this.lookTargetY = 185 - this.camZoom * 30;
+    this.camera.lookAt(camCx, 185 - this.camZoom * 30, 0);
     this.fitPlate();
     if (this.shakeIntensity > 0.2) {
       this.camera.position.x += (Math.random() - 0.5) * this.shakeIntensity;

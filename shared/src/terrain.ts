@@ -73,6 +73,10 @@ export class Terrain {
       }
       this.heights[x] = Math.max(50, Math.min(this.height - 140, h));
     }
+    // Höhe begrenzen, damit das ganze Gelände im Bild bleibt
+    let mx = 0;
+    for (let x = 0; x < this.width; x++) mx = Math.max(mx, this.heights[x]);
+    if (mx > 360) for (let x = 0; x < this.width; x++) this.heights[x] = 50 + (this.heights[x] - 50) * (310 / (mx - 50));
     // leichtes Glätten, damit keine Nadeln entstehen
     for (let pass = 0; pass < (biome === 2 ? 14 : 3); pass++) {
       for (let x = 1; x < this.width - 1; x++) {
