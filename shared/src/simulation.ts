@@ -13,7 +13,8 @@ import {
 import { DEFENSE_ITEMS, INITIAL_INVENTORY, ShopItemId, WEAPONS } from './weapons.js';
 
 export const GRAVITY = 280;
-export const POWER_TO_SPEED = 6.2;
+import { DEFAULT_POWER, MAX_POWER, MIN_POWER, POWER_TO_SPEED, WIND_ACCEL, rollWind } from './physics.js';
+
 
 export class GameSimulation {
   public terrain: Terrain;
@@ -35,6 +36,7 @@ export class GameSimulation {
   private projCounter = 0;
   private autoTimer = 0;
   private crumbling = false;
+  private subExplosions: ExplosionEvent[] = [];
 
   constructor(mode: GameMode = 'SIMULTANEOUS') {
     this.mode = mode;
@@ -46,7 +48,7 @@ export class GameSimulation {
   ): void {
     this.round = 1;
     this.terrain = new Terrain(Math.random() * 9999);
-    this.wind = Math.round((Math.random() - 0.5) * 110);
+    this.wind = rollWind();
     this.projectiles = [];
     this.pendingShots.clear();
 
@@ -66,7 +68,7 @@ export class GameSimulation {
         y: this.terrain.getHeight(x) + 360 + i * 25,
         dropping: true,
         angle: x < WORLD_WIDTH / 2 ? 45 : 135,
-        power: 55,
+        power: DEFAULT_POWER,
         hp: 100,
         maxHp: 100,
         shield: 0,
@@ -192,9 +194,17 @@ export class GameSimulation {
   }
 
   public step(dt: number): void {
-    this.recentExplosions = [];
-    this.recentBeams = this.pendingBeams;
-    this.pendingBeams = [];
+    const SUB = 4;
+    for (let i = 0; i < SUB; i++) this.stepOnce(dt / SUB, i === 0);
+  }
+
+  private stepOnce(dt: number, first: boolean): void {
+    if (first) {
+      this.recentExplosions = [];
+      this.recentBeams = this.pendingBeams;
+      this.pendingBeams = [];
+      this.subExplosions = [];
+    }
 
     // Sind keine Menschen mehr am Leben (nur noch Bots), würde das Match ewig
     // in PLANNING hängen bleiben -> Bots automatisch feuern lassen.
@@ -228,7 +238,7 @@ export class GameSimulation {
           }
         }
       }
-      p.vx += this.wind * dt;
+      p.vx += this.wind * WIND_ACCEL * dt;
       p.vy -= GRAVITY * dt;
       p.x += p.vx * dt;
       p.y += p.vy * dt;
@@ -402,7 +412,8 @@ export class GameSimulation {
       return;
     }
 
-    this.wind = Math.max(-60, Math.min(60, this.wind + Math.round((Math.random() - 0.5) * 20)));
+    // Wind ändert sich nach jedem Schuss leicht (Böen bleiben bis zur nächsten Runde)
+    if (Math.abs(this.wind) <= 100) this.wind = Math.max(-100, Math.min(100, this.wind + Math.round((Math.random() - 0.5) * 16)));
 
     if (this.mode === 'CLASSIC') {
       do {
@@ -440,7 +451,7 @@ export class GameSimulation {
   public startNextRound(): void {
     this.round += 1;
     this.terrain = new Terrain(Math.random() * 9999);
-    this.wind = Math.round((Math.random() - 0.5) * 110);
+    this.wind = rollWind();
     this.projectiles = [];
     this.pendingShots.clear();
 
@@ -457,7 +468,7 @@ export class GameSimulation {
       tank.hp = tank.maxHp;
       tank.alive = true;
       tank.ready = false;
-      tank.power = 55;
+      tank.power = DEFAULT_POWER;
       tank.angle = x < WORLD_WIDTH / 2 ? 45 : 135;
     });
 

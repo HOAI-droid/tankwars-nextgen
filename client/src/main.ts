@@ -13,6 +13,7 @@ import {
   Tank,
   WEAPONS,
   WeaponId,
+  WIND_ACCEL,
 } from '@tankwars/shared';
 import { SoundEngine } from './audio.js';
 import { StartMenu } from './menu.js';
@@ -387,7 +388,7 @@ function syncAimUi(): void {
   $('tv-angle').textContent = `${a}°`;
   $('tv-power').textContent = String(p);
   needle.style.transform = `rotate(${-a}deg)`;
-  meterFill.style.height = `${p}%`;
+  meterFill.style.height = `${Math.min(100, p / 10)}%`;
   const me = getMyTank();
   if (me && me.alive && !me.ready) {
     me.angle = a;
@@ -506,7 +507,7 @@ function applyDrag(e: PointerEvent): void {
   if (deg < 0) deg = dx >= 0 ? 0 : 180;
   const d = Math.hypot(dx, dy);
   const ref = Math.min(window.innerWidth, window.innerHeight) * 0.42;
-  const power = Math.max(10, Math.min(100, 10 + (d / ref) * 90));
+  const power = Math.max(20, Math.min(1000, 20 + (d / ref) * 560));
   inputAngle.value = String(Math.round(Math.max(0, Math.min(180, deg))));
   inputPower.value = String(Math.round(power));
   syncAimUi();
@@ -539,8 +540,8 @@ window.addEventListener('keydown', (e) => {
   switch (e.key) {
     case 'ArrowLeft': adjust('angle', big); break;
     case 'ArrowRight': adjust('angle', -big); break;
-    case 'ArrowUp': adjust('power', big); break;
-    case 'ArrowDown': adjust('power', -big); break;
+    case 'ArrowUp': adjust('power', big * 2); break;
+    case 'ArrowDown': adjust('power', -big * 2); break;
     case 'q': case 'Q': cycleWeapon(-1); break;
     case 'e': case 'E': cycleWeapon(1); break;
     case ' ': case 'Enter': fire(); break;
@@ -827,7 +828,7 @@ function loop(now: number): void {
   } else {
     // Client: Geschosse zwischen den Snapshots weiterbewegen (Extrapolation)
     for (const p of sim.projectiles) {
-      p.vx += sim.wind * dt;
+      p.vx += sim.wind * WIND_ACCEL * dt;
       p.vy -= 280 * dt;
       p.x += p.vx * dt;
       p.y += p.vy * dt;

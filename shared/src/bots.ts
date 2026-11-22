@@ -1,4 +1,5 @@
 import { ShotCommand, Tank } from './types.js';
+import { MAX_POWER, MIN_POWER, POWER_TO_SPEED, WIND_ACCEL } from './physics.js';
 
 const GRAVITY = 280;
 
@@ -11,7 +12,7 @@ export function computeBotShot(
   const targets = allTanks.filter((t) => t.alive && t.id !== bot.id);
   const target = targets[Math.floor(Math.random() * targets.length)];
   if (!target) {
-    return { tankId: bot.id, angle: 90, power: 50, weaponId: 'BABY_MISSILE' };
+    return { tankId: bot.id, angle: 90, power: 200, weaponId: 'BABY_MISSILE' };
   }
 
   const dx = target.x - bot.x;
@@ -19,60 +20,60 @@ export function computeBotShot(
   const shootRight = dx >= 0;
 
   let angle = shootRight ? 45 : 135;
-  let power = 55;
+  let power = 200;
 
   switch (bot.botType) {
     case 'MR_STUPID':
       angle = 20 + Math.random() * 140;
-      power = 25 + Math.random() * 70;
+      power = 250 + Math.random() * 700;
       break;
 
     case 'LOBBER':
       angle = shootRight ? 68 + Math.random() * 10 : 102 + Math.random() * 10;
-      power = estimatePower(Math.abs(dx), dy, angle, 0) + (Math.random() - 0.5) * 14;
+      power = estimatePower(Math.abs(dx), dy, angle, 0) + (Math.random() - 0.5) * 140;
       break;
 
     case 'RIFLEMAN':
       angle = shootRight ? 30 + Math.random() * 12 : 138 + Math.random() * 12;
-      power = estimatePower(Math.abs(dx), dy, angle, 0) + (Math.random() - 0.5) * 8;
+      power = estimatePower(Math.abs(dx), dy, angle, 0) + (Math.random() - 0.5) * 80;
       break;
 
     case 'WINDLESS_WIT': // Physik ohne Windkorrektur
       angle = shootRight ? 52 : 128;
-      power = estimatePower(Math.abs(dx), dy, angle, 0) + (Math.random() - 0.5) * 3;
+      power = estimatePower(Math.abs(dx), dy, angle, 0) + (Math.random() - 0.5) * 30;
       break;
 
     case 'LOB_SHOOT':
       if (!rebound) {
         angle = shootRight ? 68 + Math.random() * 10 : 102 + Math.random() * 10;
-        power = estimatePower(Math.abs(dx), dy, angle, 0) + (Math.random() - 0.5) * 14;
+        power = estimatePower(Math.abs(dx), dy, angle, 0) + (Math.random() - 0.5) * 140;
       } else {
         angle = shootRight ? 30 + Math.random() * 12 : 138 + Math.random() * 12;
-        power = 95;
+        power = 950;
       }
       break;
 
     case 'TWANGER':
       if (rebound) {
         angle = 70 + Math.random() * 40;
-        power = 80 + Math.random() * 20;
+        power = 800 + Math.random() * 200;
       } else {
         angle = shootRight ? 30 + Math.random() * 12 : 138 + Math.random() * 12;
-        power = estimatePower(Math.abs(dx), dy, angle, 0) + (Math.random() - 0.5) * 8;
+        power = estimatePower(Math.abs(dx), dy, angle, 0) + (Math.random() - 0.5) * 80;
       }
       break;
 
     case 'WINDMASTER':
     default:
       angle = shootRight ? 52 : 128;
-      power = estimatePower(Math.abs(dx), dy, angle, shootRight ? wind : -wind) + (Math.random() - 0.5) * 3;
+      power = estimatePower(Math.abs(dx), dy, angle, shootRight ? wind : -wind) + (Math.random() - 0.5) * 30;
       break;
   }
 
   return {
     tankId: bot.id,
     angle: Math.max(5, Math.min(175, Math.round(angle))),
-    power: Math.max(15, Math.min(100, Math.round(power))),
+    power: Math.max(MIN_POWER, Math.min(MAX_POWER, Math.round(power))),
     weaponId: bot.inventory.MISSILE > 0 && Math.random() < 0.35 ? 'MISSILE' : 'BABY_MISSILE',
   };
 }
@@ -82,8 +83,8 @@ function estimatePower(dist: number, dy: number, angleDeg: number, effectiveWind
   let bestPower = 50;
   let bestErr = Infinity;
 
-  for (let p = 15; p <= 100; p += 2) {
-    const speed = p * 6.2;
+  for (let p = MIN_POWER; p <= MAX_POWER; p += 5) {
+    const speed = p * POWER_TO_SPEED;
     let vx = Math.cos(rad) * speed;
     let vy = Math.sin(rad) * speed;
     let x = 0;
@@ -91,7 +92,7 @@ function estimatePower(dist: number, dy: number, angleDeg: number, effectiveWind
     const dt = 0.05;
 
     for (let t = 0; t < 12; t += dt) {
-      vx += effectiveWind * dt;
+      vx += effectiveWind * WIND_ACCEL * dt;
       vy -= GRAVITY * dt;
       x += vx * dt;
       y += vy * dt;

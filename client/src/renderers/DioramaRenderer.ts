@@ -17,6 +17,7 @@ import {
   WORLD_HEIGHT,
   WORLD_WIDTH,
   WorldTheme,
+  WIND_ACCEL,
   BeamEvent,
 } from '@tankwars/shared';
 
@@ -1771,7 +1772,7 @@ export class DioramaRenderer {
     for (let i = 0; i < N; i++) {
       // laufende Punkte: kleine Verschiebung entlang der Bahn
       const sub = i === 0 ? march * stepT : stepT;
-      vx += sim.wind * sub;
+      vx += sim.wind * WIND_ACCEL * sub;
       vy -= GRAVITY * sub;
       x += vx * sub;
       y += vy * sub;
